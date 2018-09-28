@@ -1,0 +1,86 @@
+# Copyright 2015 Google Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import json
+import logging
+from google.cloud import error_reporting
+from flask import current_app, Flask, redirect, request, session, url_for,render_template
+import google.cloud.logging
+import httplib2
+import urllib
+#from oauth2client.contrib.flask_util import UserOAuth2
+import oauth2client
+from storedata import upload_file, list_blobs
+
+import datetime
+
+def loadConfiguration(config):
+    app = Flask(__name__)
+    app.config.from_object(config)
+    
+def save_archive_data(generatedConsentId,consentDateTime,user_id,credentials,credDate,config):
+    print "save"
+    archives_downloaded=False
+    #print("got to request user info")
+    http = httplib2.Http()
+    credentials.authorize(http)
+    resp, content = http.request(
+       'https://www.googleapis.com/drive/v2/files?q=title+contains+%22takeout%22+and+mimeType+contains+%22zip%22')
+    if resp.status != 200:
+       print("Error while obtaining drive list: %s" % resp)
+       print "error drive"
+       return None
+    else:
+       credentials.authorize(http)
+       print "got file"
+       for file in json.loads(content)['items']:
+	 print "got file"
+         takeoutDateTime=datetime.datetime.strptime(file['createdDate'].split(".")[0],"%Y-%m-%dT%H:%M:%S")
+         if 'downloadUrl' in file and (takeoutDateTime + datetime.timedelta(hours=24) > consentDateTime): #This gives buffer given unknown timezones, but limits to 'recent' takeouts
+           print("file is:%s" % file['downloadUrl'])
+           #print(file)
+           get_resp,get_content = http.request(file['downloadUrl'])
+           #print("response length %s" % len(get_content))
+           
+           gcs_url=upload_file(get_content,"takeoutArchive/"+generatedConsentId+'-'+file['title'],file['mimeType'], config.CLOUD_STORAGE_BUCKET_PRIVATE)
+           fileDate=datetime.datetime.strptime(file['createdDate'][0:10],"%Y-%m-%d").date()
+           if fileDate + datetime.timedelta(days=1) >= credDate:
+             archives_downloaded=True
+    return archives_downloaded
+
+
+def process_pending_consents(config):
+    loadConfiguration(config)
+    print "enter"
+    for blob in list_blobs("consentPending", config.CLOUD_STORAGE_BUCKET_PRIVATE):
+       print "here"
+       if blob.name[-1]=="/":
+	  continue
+       stringCred=blob.download_as_string().decode("utf-8")
+       generatedConsentId=blob.name.split("-")[0].split("/")[-1]
+       consentDateTime=datetime.datetime.strptime("".join(blob.name.split("-")[1:])[0:14],"%Y%m%d%H%M%S")
+
+
+       if len(stringCred)>0:
+           credDict=json.loads(stringCred)
+           credential=oauth2client.client.OAuth2Credentials(credDict['access_token'],credDict['client_id'],credDict['client_secret'],credDict['refresh_token'],credDict['token_expiry'],credDict['token_uri'],credDict['user_agent'])
+           credDate=datetime.datetime.strptime(credDict['token_expiry'][0:10],"%Y-%m-%d").date() 
+
+           archives_downloaded=save_archive_data(generatedConsentId,consentDateTime,credDict['id_token']['sub'],credential,credDate,config)
+           if archives_downloaded:
+               print("delete pending consent")
+               blob.delete()
+
+
+
