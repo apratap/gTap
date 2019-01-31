@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h2>Directions</h2>
+    <ol>
+        <li>Click the button <em>SELECT NONE</em></li>
+        <li>Flip the switch for <em>Location History</em> to enabled</li>
+        <li>Flip the switch for <em>Search Contributions</em> to enabled</li>
+        <li>Click the button <em>NEXT</em></li>
+        <li>Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em></li>
+        <li>Click the button <em>CREATE ARCHIVE</em></li>
+        <li>Click the button <em>COMPLETE</em> at the bottom of the page</li>
+    </ol>
+
+    <hr>
+    <iframe scrolling="yes" style="width:100%; border: none; height: 800px" src="http://takeout.google.com/settings/takeout"></iframe>
+    <hr>
+
+    <form method="POST" enctype="multipart/form-data">
+        <button type="submit" class="btn btn-success">COMPLETE</button>
+    </form>
+{% endblock %}
