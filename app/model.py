@@ -1,12 +1,12 @@
-from base64 import b64encode, b64decode
 from contextlib import contextmanager
+import json
 
-from sqlalchemy import create_engine, Boolean, Column, Integer, String, DateTime, Index, ForeignKey
+from simplecrypt import encrypt, decrypt
+from sqlalchemy import create_engine, Boolean, Column, Integer, LargeBinary, String, DateTime, Index, ForeignKey
 from sqlalchemy.engine.url import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from simplecrypt import encrypt, decrypt
 import synapseclient
 from synapseclient import Schema, Table
 from synapseclient import Column as SynColumn
@@ -21,19 +21,18 @@ Base = declarative_base()
 SYN_SCHEMA = Schema(
     name='Consents',
     columns=[
-        SynColumn(name='guid', columnType='STRING', maximumSize=55),
-        SynColumn(name='first_name', columnType='STRING', maximumSize=255),
-        SynColumn(name='last_name',  columnType='STRING', maximumSize=255),
-        SynColumn(name='email',      columnType='STRING', maximumSize=255),
-        SynColumn(name='gender',     columnType='STRING', maximumSize=255),
-        SynColumn(name='timestamp',  columnType='STRING', maximumSize=63),
-        SynColumn(name='has_location_data', columnType='BOOLEAN'),
-        SynColumn(name='has_search_data',   columnType='BOOLEAN'),
+        SynColumn(name='guid',        columnType='STRING', maximumSize=55),
+        SynColumn(name='first_name',  columnType='STRING', maximumSize=255),
+        SynColumn(name='last_name',   columnType='STRING', maximumSize=255),
+        SynColumn(name='email',       columnType='STRING', maximumSize=255),
+        SynColumn(name='gender',      columnType='STRING', maximumSize=255),
+        SynColumn(name='timestamp',   columnType='STRING', maximumSize=63),
+        SynColumn(name='takeout_sid', columnType='STRING')
     ],
     parent=secrets.PROJECT_SYNID
 )
 BLANK_CONSENT = (
-    'blank', 'blank', 'blank', 'blank@blank.com', 'blank', 'blank', False, False
+    'blank', 'blank', 'blank', 'blank@blank.com', 'blank', 'blank', 'blank'
 )
 
 
@@ -42,8 +41,11 @@ class Consent(Base):
 
     guid = Column(String, primary_key=True)
     consent_dt = Column(DateTime)
-    data = Column(String)
+    data = Column(LargeBinary)
+    # blob = Column(String)
+    # salt = Column(String)
     error_state = Column(Boolean)
+    processed = Column(Boolean)
 
     Index('idx_guid', 'guid')
     Index('idx_dt', 'consent_dt')
@@ -53,6 +55,7 @@ class Consent(Base):
         self.consent_dt = kwargs['consent_dt']
         self.data = self.__encrypt(kwargs['credentials'])
         self.error_state = False
+        self.processed = False
 
     def __repr__(self):
         return "<Consent(guid='%s', consentDateTime='%s')>" % \
@@ -66,25 +69,31 @@ class Consent(Base):
         return dict(
             guid=self.guid,
             consent_dt=self.consent_dt,
-            error_state=self.error_state
+            error_state=self.error_state,
+            processed=self.processed
         )
 
     @property
     def credentials(self):
-        decoded = b64decode(self.data)
-        return decrypt(secrets.CIPHER_KEY, decoded)
+        s = decrypt(secrets.CIPHER_KEY, self.data)
+        s = s.decode('utf-8')
+
+        return json.loads(s)
 
     @property
     def tuple(self):
         return (
-            self.guid, self.consent_dt.strftime(secrets.DTFORMAT), self.error_state
+            self.guid, self.consent_dt.strftime(secrets.DTFORMAT), self.error_state, self.processed
         )
 
     @staticmethod
     def __encrypt(data):
-        cypher_text = encrypt(secrets.CIPHER_KEY, data)
-        encoded = b64encode(cypher_text)
-        return encoded
+        s = json.dumps(data)
+        s = s.encode('utf-8')
+
+        msg = encrypt(secrets.CIPHER_KEY, s)
+
+        return msg
 
 
 class TakeoutError(Base):
@@ -105,7 +114,7 @@ class TakeoutError(Base):
 @contextmanager
 def session_scope(conn):
     """Provide a transactional scope around a series of operations."""
-
+    conn = connection(conn)
     engine_ = create_engine(URL(**conn))
     session = sessionmaker(bind=engine_)()
 
@@ -124,28 +133,40 @@ def session_scope(conn):
 def add_consent(data, conn=None):
     consent = Consent(**data)
 
-    with session_scope(connection(conn)) as s:
+    with session_scope(conn) as s:
         s.add(consent)
 
     return consent
 
 
-def add_error(data, conn=None):
-    with session_scope(connection(conn)) as s:
-        consent = s.query(Consent).filter(Consent.guid == data['guid']).first()
-        if consent is None:
-            raise KeyError
-        else:
-            s.add(data)
-            consent.error_state = True
+def add_error(e, consent, conn=None):
+    with session_scope(conn) as s:
+        error = TakeoutError(
+            guid=consent.guid,
+            error=str(type(e)),
+            message=str(e.args)
+        )
+        s.add(error)
+        consent.error_state = True
 
 
-def get_all_pending(conn=None):
-    with session_scope(connection(conn)) as s:
-        pending = s.query(Consent)\
-                .filter(Consent.error_state == False)\
-                .order_by(Consent.consent_dt.desc())\
-                .all()
+def get_all_pending(conn=None, session=None):
+    if session is None:
+        session = session_scope(conn)
+        close = True
+    else:
+        close = False
+
+    pending = session.query(Consent)\
+        .filter(
+            Consent.error_state == False,
+            Consent.processed == False
+        )\
+        .order_by(Consent.consent_dt.desc())\
+        .all()
+
+    if close:
+        session.close()
 
     return pending
 
@@ -158,13 +179,33 @@ def connection(conn):
 
 
 def get_consent(guid, conn=None):
-    with session_scope(connection(conn)) as s:
+    with session_scope(conn) as s:
         consent = s.query(Consent).filter(Consent.guid == guid).first()
 
     return consent
 
 
 def remove_consent(consent):
+    guid = verify_consent(consent)
+
+    with session_scope(secrets.DATABASE) as s:
+        s.query(Consent).filter_by(Consent.guid == guid).delete()
+
+
+def mark_completed(consent):
+    guid = verify_consent(consent)
+
+    with session_scope(secrets.DATABASE) as s:
+        c = s.query(Consent).filter_by(Consent.guid == guid).first()
+
+        if c is not None:
+            c.data = None
+            c.processed = True
+        else:
+            raise KeyError
+
+
+def verify_consent(consent):
     if isinstance(consent, Consent):
         guid = consent.guid
     elif isinstance(consent, int):
@@ -172,8 +213,7 @@ def remove_consent(consent):
     else:
         raise TypeError('Type %s not supported' % type(consent))
 
-    with session_scope(secrets.DATABASE) as s:
-        s.query(Consent).filter_by(Consent.guid == guid).delete()
+    return guid
 
 
 def put_consent_to_synapse(data):
@@ -190,13 +230,13 @@ def put_consent_to_synapse(data):
     syn.store(Table(SYN_SCHEMA, data))
 
 
-def update_flag(consent, field):
+def update_synapse_flag(consent, flag):
     results = syn.tableQuery(
         "select * from %s where guid = '%s'" %
         (secrets.CONSENTS_SYNID, consent.guid)
     ).asDataFrame()
 
-    results[field] ^= results[field]
+    results[flag] ^= results[flag]
     syn.store(Table(SYN_SCHEMA, results, etag=results.etag))
 
 
@@ -223,4 +263,4 @@ def build_synapse_table():
 
 if __name__ == '__main__':
     create_database(secrets.DATABASE)
-    build_synapse_table()
+    #build_synapse_table()
