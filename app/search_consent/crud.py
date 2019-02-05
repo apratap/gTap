@@ -34,7 +34,7 @@ def add():
 
         model.put_consent_to_synapse(data)
 
-        return render_template('download.html')
+        return redirect(url_for('.download'))
 
     else:
         return render_template("error.html")
@@ -43,6 +43,9 @@ def add():
 @crud.route('/download', methods=['GET', 'POST'])
 @oauth2.required
 def download():
+    if request.method == 'GET':
+        return render_template('download.html')
+
     if request.method == 'POST':
         data = request.form.to_dict(flat=True)
 
@@ -53,3 +56,10 @@ def download():
         model.add_consent(data)
 
         return redirect(url_for('.thanks'))
+
+
+@crud.route('/thanks', methods=['GET'])
+@oauth2.required
+def thanks():
+    if request.method == 'GET':
+        return render_template('thanks.html')
