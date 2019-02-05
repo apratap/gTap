@@ -5,7 +5,8 @@ import logging
 import os
 from zipfile import ZipFile
 
-from oauth2client.client import GoogleCredentials
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import AuthorizedSession
 import pandas as pd
 import sendgrid
 from sendgrid.helpers.mail import *
@@ -37,11 +38,16 @@ class TakeOutExtractor(object):
                 'takeOutLocationQueryFile: %s' % self.to_location_file)
 
     def authorize_user_session(self):
-        credentials = json.loads(self.consent.credentials)
-        credentials = GoogleCredentials.from_json(credentials)
+        jdata = json.loads(self.consent.credentials)
+        credentials = Credentials(
+            token=jdata['access_token'],
+            refresh_token=jdata['refresh_token'],
+            token_uri=jdata['token_uri'],
+            client_id=jdata['client_id'],
+            client_secret=jdata['client_secret']
+        )
 
-        h = httplib2.Http()
-        self.authorized_session = credentials.authorize(h)
+        self.authorized_session = AuthorizedSession(credentials)
 
     def locate_takeout_file(self):
         self.response = self.authorized_session.get(
@@ -49,9 +55,15 @@ class TakeOutExtractor(object):
 
     def get_takeout_id(self):
         df = pd.DataFrame.from_records(json.loads(self.response.content)['files'])
-        df['timeStamp'] = df.name.str.split('-', 3).apply(lambda x: x[1])
-        df['timeStamp'] = pd.to_datetime(df['timeStamp'])
-        self.to_file_id = df.id[df.timeStamp.argmax]
+
+        if len(df) > 0:
+            df['timeStamp'] = df.name.str.split('-', 3).apply(lambda x: x[1])
+            df['timeStamp'] = pd.to_datetime(df['timeStamp'])
+            self.to_file_id = df.id[df.timeStamp.argmax]
+
+            return True
+        else:
+            return False
 
     def download_takeout_data(self):
         url = 'https://www.googleapis.com/drive/v3/files/%s?alt=media' % self.to_file_id
@@ -151,16 +163,32 @@ class TakeOutExtractor(object):
     def run(self):
         self.authorize_user_session()
         self.locate_takeout_file()
-        self.get_takeout_id()
-        self.download_takeout_data()
 
-        searches_file = self.get_searches_file()
-        self.upload_search_data(searches_file)
+        ready = self.get_takeout_id()
+        if ready:
+            self.download_takeout_data()
 
-        locations_files = self.get_locations_file()
-        self.upload_location_data(locations_files)
+            e1, e2 = None, None
+            try:
+                searches_file = self.get_searches_file()
+                self.upload_search_data(searches_file)
+            except Exception as e1:
+                pass
 
-        self.send_email()
+            try:
+                locations_files = self.get_locations_file()
+                self.upload_location_data(locations_files)
+            except Exception as e2:
+                pass
+
+            self.send_email()
+
+            return {
+                'search': e1,
+                'location': e2
+            }
+        else:
+            return 'drive_not_ready'
 
 
 def parse_takeout_data():
