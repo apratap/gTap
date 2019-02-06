@@ -48,7 +48,7 @@ def create_app(config, debug=False, testing=False, config_overrides=None):
         del session['profile']
         session.modified = True
         oauth2.storage.delete()
-        # return redirect(request.referrer or '/')
+
         return redirect('https://mail.google.com/mail/u/0/?logout&hl=en')
 
     # Register the Consent CRUD blueprint.
