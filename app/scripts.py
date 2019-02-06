@@ -9,11 +9,11 @@ from google.auth.transport.requests import AuthorizedSession
 import pandas as pd
 import sendgrid
 from sendgrid.helpers.mail import *
-import synapseclient
+from synapseclient import File, Activity
 
 import app.config as config
 
-syn = synapseclient.login()
+syn = config.syn
 
 
 class TakeOutExtractor(object):
@@ -121,7 +121,7 @@ class TakeOutExtractor(object):
         if len(location_files) > 0:
             def write_json(count, f):
                 filename = '%s_%s_%s_LocationQueries.json' % (
-                    str(self.consent.pid), self.consent.ext_id, self.consent. count + 1)
+                    str(self.consent.pid), self.consent.ext_id, count + 1)
 
                 with open(filename, 'wb') as out:
                     out.write(self.to_zipfile.open(f).read())
@@ -138,14 +138,12 @@ class TakeOutExtractor(object):
 
     @staticmethod
     def upload_search_data(filename):
-        result = syn.store(
-            synapseclient.File(filename, parentId=config.SEARCH_SYNID)
-        )
+        result = syn.store(File(filename, parentId=config.SEARCH_SYNID))
         synid = result.properties['id']
 
         syn.SetProvenance(
             synid,
-            activity=synapseclient.Activity(
+            activity=Activity(
                 name='AutoDownload Participant Search Data',
                 description='This file was created by gTAP',
             )
@@ -158,14 +156,12 @@ class TakeOutExtractor(object):
     def upload_location_data(filenames):
         results = []
         for f in filenames:
-            result = syn.store(
-                synapseclient.File(f, parentId=config.LOCATION_SYNID)
-            )
+            result = syn.store(File(f, parentId=config.LOCATION_SYNID))
             synid = result.properties['id']
 
             syn.setProvenance(
                 synid,
-                activity=synapseclient.Activity(
+                activity=Activity(
                     name='AutoDownload Participant Location Data',
                     description='This file was created by gTAP'
                 )

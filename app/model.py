@@ -14,8 +14,7 @@ from synapseclient import Column as SynColumn
 
 import app.config as secrets
 
-syn = synapseclient.Synapse()
-syn.login()
+syn = secrets.syn
 
 Base = declarative_base()
 

@@ -20,9 +20,7 @@ def create_app(config, debug=False, testing=False, config_overrides=None):
     if not app.testing:
         pass
 
-    # Setup the data model
-
-    # Initalize the OAuth2 helper.
+    # Initialize the OAuth2 helper.
     # ref - https://developers.google.com/identity/protocols/OAuth2WebServer?hl=en#incrementalAuth
     # ref - https://github.com/google/google-api-php-client/issues/1064
     additional_kwargs = {
