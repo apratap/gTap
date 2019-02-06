@@ -1,3 +1,9 @@
+import os
+
+print()
+print(os.getcwd())
+print()
+
 from app.aa import ArchiveAgent
 import app.search_consent as search_consent
 import app.config as config
