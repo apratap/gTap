@@ -3,7 +3,7 @@ import json
 import re
 
 from simplecrypt import encrypt, decrypt
-from sqlalchemy import and_, or_, create_engine, Boolean, Column, Integer, LargeBinary, String, DateTime, Index, ForeignKey
+from sqlalchemy import and_, or_, create_engine, Column, Integer, LargeBinary, String, DateTime, Index, ForeignKey
 from sqlalchemy.engine.url import URL
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.declarative import declarative_base
