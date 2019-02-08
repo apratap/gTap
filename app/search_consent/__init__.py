@@ -2,12 +2,13 @@ import json
 from flask import current_app, Flask, redirect, session, render_template
 import httplib2
 from oauth2client.contrib.flask_util import UserOAuth2
+import os
 
 oauth2 = UserOAuth2()
 
 
 def create_app(config, debug=False, testing=False, config_overrides=None):
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=os.path.abspath('./static'))
     app.config.from_object(config)
 
     app.debug = debug
