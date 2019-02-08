@@ -117,11 +117,22 @@ class TakeoutError(Base):
         return "%s: %s" % (self.error, self.message)
 
 
+def get_eninge(conn):
+    driver = conn['drivername']
+
+    if driver == 'sqlite':
+        args = conn['path']
+    elif driver == 'postgres':
+        args = URL(**conn)
+    else:
+        raise Exception('driver undefined')
+
+    return create_engine(args)
+
 @contextmanager
 def session_scope(conn):
-    """Provide a transactional scope around a series of operations."""
     conn = connection(conn)
-    engine_ = create_engine(URL(**conn))
+    engine = get_engine(conn)
     session = sessionmaker(bind=engine_)()
 
     try:
@@ -283,7 +294,7 @@ def update_synapse_sids(consent):
 
 
 def create_database(conn):
-    engine = create_engine(URL(**conn))
+    engine = get_engine(conn)
     Base.metadata.create_all(engine)
 
 
