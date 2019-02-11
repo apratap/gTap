@@ -217,9 +217,7 @@ class TakeOutExtractor(object):
             else:
                 return 'session authorized and takeout data ready but failed to download'
         else:
-            pass
-
-        return 'drive_not_ready'
+            return 'drive_not_ready'
 
 
 def parse_takeout_data():

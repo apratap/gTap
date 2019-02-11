@@ -52,7 +52,7 @@ rsa==4.0
 SecretStorage==2.3.1
 semantic-version==2.5.0
 sendgrid==5.6.0
-simple-crypt==4.1.7
+git+https://github.com/furritos/flask-simple-crypt
 six==1.11.0
 SQLAlchemy==1.2.17
 synapseclient==1.9.1
