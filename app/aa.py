@@ -127,6 +127,7 @@ class ArchiveAgent(object):
             target=self.__run_agent,
             args=(self.wait_time, self.conn, self.keep_alive, self.__sigkill, self.__done)
         )
+        self.__agent.name = 'ArchiveAgent'
 
     def start_async(self):
         if not self.__agent.is_alive():

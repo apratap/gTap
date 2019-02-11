@@ -22,6 +22,7 @@ if not os.path.exists(config.DATABASE['path']):
 else:
     log('found existing task db')
 
+
 log('starting archive agent')
 agent = ArchiveAgent(conn=config.DATABASE)
 agent.start_async()
