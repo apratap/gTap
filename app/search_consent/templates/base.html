@@ -5,32 +5,61 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="//maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
   </head>
+
+  <style>
+      .navbar-default {
+          background: #33006f;
+          height: 60px;
+      }
+      #logo {
+          width: 400px;
+      }
+      .img-circle {
+          height: 50px;
+          width: 50px;
+          position: relative;
+          top: -11px;
+      }
+      .profile-name {
+          color: white;
+        position: relative;
+        font-size: large;
+          top: -7px;
+          left: 5px;
+      }
+    .login-link {
+          color: white;
+        position: relative;
+        font-size: large;
+      }
+      .login-link:hover {
+          color: goldenrod;
+          text-decoration: none;
+      }
+      .profile-name:hover {
+          color: goldenrod;
+          text-decoration: none;
+      }
+  </style>
   <body>
     <div class="navbar navbar-default">
       <div class="container">
         <div class="navbar-header">
           <div class="navbar-brand">
-            <img src="https://globalhealth.washington.edu/sites/all/themes/uwgh_theme/images/uwgh-logo.png" width="350" height="35" style="float: left;" />
+              <img id="logo" src="{{ url_for('static', filename='uw-logo.png') }}" alt="UW">
           </div>
         </div>
-<!-- 
-        <ul class="nav navbar-nav">
-            <li><a href="/consent/mine">View My Consents</a></li>
-          
-            <li><a href="/">Add Consent</a></li>
-        </ul>
--->
+
         <p class="navbar-text navbar-right">
         {% if session.profile %}
-          <a href="/logout">
             {% if session.profile.image %}
               <img class="img-circle" src="{{session.profile.image.url}}" width="24">
             {% endif %}
-            {{session.profile.displayName}}
-          </a>
+          <a class="profile-name" href="/logout">Logout</a>
         {% else %}
-          <a href="/oauth2authorize">Login</a>
+            <a class="login-link" href="/oauth2authorize">Login</a>
         {% endif %}
         </p>
       </div>

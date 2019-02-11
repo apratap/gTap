@@ -1,22 +1,54 @@
 {% extends "base.html" %}
 
 {% block content %}
-    <h2>Directions</h2>
-    <ol>
-        <li>Click the button <em>SELECT NONE</em></li>
-        <li>Flip the switch for <em>Location History</em> to enabled</li>
-        <li>Flip the switch for <em>Search Contributions</em> to enabled</li>
-        <li>Click the button <em>NEXT</em></li>
-        <li>Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em></li>
-        <li>Click the button <em>CREATE ARCHIVE</em></li>
-        <li>Click the button <em>COMPLETE</em> at the bottom of the page</li>
-    </ol>
-
-    <hr>
-    <iframe scrolling="yes" style="width:100%; border: none; height: 800px" src="http://takeout.google.com/settings/takeout"></iframe>
-    <hr>
-
     <form method="POST" enctype="multipart/form-data">
-        <button type="submit" class="btn btn-success">COMPLETE</button>
+        <div class="form-group">
+            <label class="form-label">Participant Id:</label>
+            <input class="form-element form-control"
+                   type="text"
+                   name="participant_id"
+                   id="participant_id"
+                   placeholder="{{consent.participant_id}}"
+                   value="{{consent.participant_id}}" />
+        </div>
+
+        <h3>Takeout Directions</h3>
+        <p>
+            Please read these directions carefully before proceeding to the next page. Clicking the 'Takeout' button
+            below will redirect this page to the Google Takeout tool. On this page we need you to perform the operations
+            listed below. We recommend either taking a screenshot of the directions or holding your 'cntrl' key when
+            clicking the button to open the link in a new tab. Redirecting to the Takeout page may take several seconds.
+        </p>
+        <ol>
+            <li>Click the button <em>SELECT NONE</em></li>
+            <li>Flip the switch for <em>Location History</em> to enabled</li>
+            <li>Flip the switch for <em>Search Contributions</em> to enabled</li>
+            <li>Click the button <em>NEXT</em></li>
+            <li>Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em></li>
+            <li>Click the button <em>CREATE ARCHIVE</em></li>
+        </ol>
+
+        <button type="submit" class="btn btn-success">Takeout</button>
     </form>
+
+    <style>
+        .form-element {
+            background: transparent !important;
+            border: none !important;
+            font-weight: bold !important;
+            font-size: 18px !important;
+            font-style: italic !important;
+            display: inline !important;
+            box-shadow: none !important;
+            width: 250px !important;
+            z-index: -1 !important;
+        }
+        .form-label {
+            display: inline;
+            margin-right: 5px;
+            font-size: 18px;
+            font-style: italic;
+        }
+    </style>
+
 {% endblock %}
