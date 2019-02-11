@@ -4,6 +4,8 @@ import argparse
 import datetime as dt
 from multiprocessing import Pipe, Process
 import os
+from pytz import timezone as tz
+import socket
 import time
 
 import synapseclient
@@ -30,7 +32,11 @@ BLANK_LOG = (
 
 
 def log(message):
-    data = [dt.datetime.now().strftime(secrets.DTFORMAT), message]
+    rmeow = dt.datetime.now(tz("US/Pacific"))
+    data = [
+        rmeow.strftime(secrets.DTFORMAT).upper(),
+        f'{socket.gethostname()}: {message}'
+    ]
     syn.store(Table(LOG_SCHEMA, [data]))
 
 
@@ -52,7 +58,7 @@ def build_synapse_log():
 
 def get_wait_time_from_env():
     if 'ARCHIVE_AGENT_WAIT_TIME' in os.environ:
-        return os.environ['ARCHIVE_AGENT_WAIT_TIME']
+        return float(os.environ['ARCHIVE_AGENT_WAIT_TIME'])
     else:
         return None
 
@@ -111,7 +117,7 @@ class ArchiveAgent(object):
             self.wait_time = wait_time
 
         if self.wait_time is None:
-            self.wait_time = 600
+            self.wait_time = 600.
 
         self.conn = conn
         self.keep_alive = keep_alive
@@ -124,7 +130,6 @@ class ArchiveAgent(object):
 
     def start_async(self):
         if not self.__agent.is_alive():
-            log('starting agent asynchronously')
             self.__agent.start()
         else:
             pass
@@ -158,14 +163,13 @@ class ArchiveAgent(object):
                     pending = model.get_all_pending(session=s)
 
                     if len(pending) > 0:
-                        log(f'processing {len(pending)} tasks')
-                    else:
-                        pass
+                        log(f'found {len(pending)} tasks to process')
 
                     while len(pending) > 0:
                         consent = pending.pop()
-                        task = TakeOutExtractor(consent)
+                        log(f'starting task for {str(consent)}')
 
+                        task = TakeOutExtractor(consent)
                         result = task.run()
 
                         if isinstance(result, str):
@@ -197,36 +201,24 @@ class ArchiveAgent(object):
                             else:
                                 pass
 
-                            search_results = 'search: ' + ', '.join([
-                                str(e) for e in consent.search_err
-                            ]) if len(consent.search_err) > 0 else result['search']
-
-                            location_results = 'location: ' + ', '.join([
-                                str(e) for e in consent.location_err
-                            ]) if len(consent.location_err) > 0 else result['location']
-
-                            log(f'archival task: {str(consent)}. {search_results}. {location_results}')
+                            log(f'archival task for {str(consent)} completed')
 
                 terminate = sigkill.poll(1)
                 if not terminate:
-                    # check for updated wait time
-                    new_wait = get_wait_time_from_env()
-                    if new_wait is not None:
-                        wait_time = new_wait
-                    else:
-                        pass
-
                     remaining = wait_time - (time.time() - start)
+                    # log(f'sleeping for {int(remaining)} seconds')
                     time.sleep(remaining if remaining > 0 else 0)
                 else:
                     pass
 
             except Exception as e:
+                log(f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}')
+
                 if not keep_alive:
-                    log(f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}')
+                    log('agent shutting down')
                     break
                 else:
-                    pass
+                    log('agent restarting')
 
         done.send(True)
 
