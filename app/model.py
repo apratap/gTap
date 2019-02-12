@@ -1,7 +1,12 @@
 import argparse
 from contextlib import contextmanager
+import datetime as dt
 import json
 import re
+from pytz import timezone as tz
+from ssl import SSLError
+import sys
+import time
 
 from flask_simple_crypt import SimpleCrypt
 from sqlalchemy import and_, or_, create_engine, Column, Integer, LargeBinary, String, DateTime, Index, ForeignKey
@@ -12,6 +17,7 @@ from sqlalchemy.orm import sessionmaker, relationship
 import synapseclient
 from synapseclient import Schema, Table
 from synapseclient import Column as SynColumn
+from synapseclient.exceptions import SynapseHTTPError
 
 import app.config as secrets
 
@@ -23,9 +29,7 @@ SYN_SCHEMA = Schema(
     name='Consents',
     columns=[
         SynColumn(name='participant_id', columnType='STRING', maximumSize=31),
-        SynColumn(name='guid',          columnType='STRING', maximumSize=31),
-        SynColumn(name='guid_counter', columnType='INTEGER'),
-        SynColumn(name='ext_id',       columnType='STRING', maximumSize=31),
+        SynColumn(name='eid',          columnType='INTEGER'),
         SynColumn(name='consent_dt',   columnType='STRING', maximumSize=63),
         SynColumn(name='location_sid', columnType='STRING', maximumSize=31),
         SynColumn(name='search_sid',   columnType='STRING', maximumSize=31),
@@ -34,7 +38,7 @@ SYN_SCHEMA = Schema(
     parent=secrets.PROJECT_SYNID
 )
 BLANK_CONSENT = (
-    'blank', 'blank', 0, 'blank', 'blank', 'blank', 'blank', 'blank', 'blank'
+    'blank', 0, 'blank', 'blank', 'blank', 'blank'
 )
 
 
@@ -53,9 +57,8 @@ cypher.init_app(AppWrap(secrets))
 class Consent(Base):
     __tablename__ = 'consent'
 
+    eid = Column(Integer, primary_key=True)
     pid = Column(String)
-    guid = Column(String, primary_key=True)
-    guid_counter = Column(Integer, primary_key=True)
     email = Column(String)
     first_name = Column(String)
     last_name = Column(String)
@@ -64,20 +67,19 @@ class Consent(Base):
     data = Column(LargeBinary)
 
     location_sid = Column(String)
-    location_eid = Column(ForeignKey('takeout_errors.eid'))
-    location_err = relationship('TakeoutError', primaryjoin="Consent.location_eid == foreign(TakeoutError.eid)")
+    location_eid = Column(ForeignKey('takeout_errors.errid'))
+    location_err = relationship('TakeoutError', primaryjoin="Consent.location_eid == foreign(TakeoutError.errid)")
 
     search_sid = Column(String)
-    search_eid = Column(ForeignKey('takeout_errors.eid'))
-    search_err = relationship('TakeoutError', primaryjoin="Consent.search_eid == foreign(TakeoutError.eid)")
+    search_eid = Column(ForeignKey('takeout_errors.errid'))
+    search_err = relationship('TakeoutError', primaryjoin="Consent.search_eid == foreign(TakeoutError.errid)")
 
-    Index('idx_ext', 'ext_id')
+    Index('idx_eid', 'eid')
     Index('idx_dt', 'consent_dt')
 
     def __init__(self, **kwargs):
         self.pid = kwargs['participant_id']
-        self.guid = kwargs['guid']
-        self.guid_counter = kwargs['guid_counter']
+        self.eid = kwargs.get('eid')
         self.consent_dt = kwargs['consent_dt']
         self.data = self.__encrypt(kwargs['credentials'])
         self.location_sid = kwargs.get('location_sid')
@@ -88,14 +90,14 @@ class Consent(Base):
         self.gender = kwargs.get('gender')
 
     def __repr__(self):
-        return "<Consent(ext_id='%s', consentDateTime='%s', err='%s')>" % (
-            f'{str(self.guid_counter).zfill(secrets.EXT_ZERO_FILL)}{self.guid}',
+        return "<Consent(eid='%s', consentDateTime='%s', err='%s')>" % (
+            f'{self.eid}',
             self.consent_dt.strftime(secrets.DTFORMAT),
             (self.search_err or self.location_err)
         )
 
     def __str__(self):
-        return f'participant: {self.pid}, ext_id: {self.ext_id}'
+        return f'participant: {self.pid}, eid: {self.eid}'
 
     @property
     def credentials(self):
@@ -103,10 +105,6 @@ class Consent(Base):
         s = s.decode('utf-8')
 
         return json.loads(s)
-
-    @property
-    def ext_id(self):
-        return f'{str(self.guid_counter).zfill(secrets.EXT_ZERO_FILL)}{self.guid}'
 
     @staticmethod
     def __encrypt(data):
@@ -121,7 +119,7 @@ class Consent(Base):
 class TakeoutError(Base):
     __tablename__ = 'takeout_errors'
 
-    eid = Column(Integer, primary_key=True)
+    errid = Column(Integer, primary_key=True)
     error = Column(String(31))
     message = Column(String)
 
@@ -191,7 +189,7 @@ def add_search_error(session, consent, err):
 
     add_entity(session, err)
 
-    consent.search_eid = err.eid
+    consent.search_eid = err.errid
     consent.search_err = [err]
 
     return consent
@@ -202,7 +200,7 @@ def add_location_error(session, consent, err):
 
     add_entity(session, err)
 
-    consent.location_eid = err.eid
+    consent.location_eid = err.errid
     consent.location_err = [err]
 
     return consent
@@ -236,9 +234,9 @@ def connection(conn):
         return conn
 
 
-def get_consent(guid, guid_counter, session):
+def get_consent(pid, eid, session):
     c = session.query(Consent).filter(
-        and_(Consent.guid == guid, Consent.guid_counter == guid_counter)
+        and_(Consent.pid == pid, Consent.eid == eid)
     ).first()
 
     return c
@@ -246,7 +244,7 @@ def get_consent(guid, guid_counter, session):
 
 def update_consent(consent):
     with session_scope(secrets.DATABASE) as s:
-        c = get_consent(consent.guid, consent.guid_counter, s)
+        c = get_consent(consent.pid, consent.eid, s)
 
         if c is not None:
             if consent.location_err is None:
@@ -262,35 +260,54 @@ def update_consent(consent):
             raise KeyError
 
 
-def get_next_guid_counter(guid):
+def get_next_eid():
     results = syn.tableQuery(
-        f"select max(guid_counter) as cnt from {secrets.CONSENTS_SYNID} where guid='{guid}'"
+        f"select max(eid) as cnt from {secrets.CONSENTS_SYNID}"
     ).asDataFrame()
     results = results.cnt.tolist()
 
-    return results[0] + 1 if len(results) > 0 else 1
+    idx = results[0] + 1 if len(results) > 0 else 1
+    return idx
 
 
 def put_consent_to_synapse(data):
+    rmeow = dt.datetime.now(tz("US/Pacific")).strftime(secrets.DTFORMAT).upper()
     data = [[
         data['participant_id'],
-        data['guid'],
-        data['guid_counter'],
-        f'{str(data["guid_counter"]).zfill(secrets.EXT_ZERO_FILL)}{data["guid"]}',
+        data['eid'],
         data['consent_dt'].strftime(secrets.DTFORMAT).upper(),
         data.get('location_sid'),
         data.get('search_sid'),
         data.get('notes')
     ]]
-    syn.store(Table(SYN_SCHEMA, data))
+
+    def put():
+        syn.store(Table(SYN_SCHEMA, data))
+
+    def write_to_stdout(e):
+        sys.stdout.write(f'{rmeow}: failed to push consent <{data}> to Synapse {e}\n')
+
+    retries, completed = 10, False
+    while not completed and retries > 0:
+        try:
+            put()
+            completed = True
+        except SSLError:
+            write_to_stdout('SSLError')
+        except SynapseHTTPError:
+            write_to_stdout('SynapseHTTPError')
+        except Exception as e:
+            write_to_stdout(str(e))
+
+        retries -= 1
+        time.sleep(3)
 
 
 def update_synapse_sids(consent):
     results = syn.tableQuery(
         f"select * from {secrets.CONSENTS_SYNID} "
         f"where participant_id='{consent.pid}'"
-        f"  and guid='{consent.guid}'"
-        f"  and guid_counter='{consent.guid_counter}'"
+        f"  and eid='{consent.eid}'"
     ).asDataFrame()
 
     assert len(results) == 1
@@ -322,7 +339,7 @@ def build_synapse_table():
     table = Table(SYN_SCHEMA, values=[BLANK_CONSENT])
     table = syn.store(table)
 
-    results = syn.tableQuery("select * from %s where ext_id = '%s'" % (table.tableId, BLANK_CONSENT[0]))
+    results = syn.tableQuery("select * from %s where participant_id = '%s'" % (table.tableId, BLANK_CONSENT[0]))
     syn.delete(results)
 
     syn.setProvenance(
@@ -334,17 +351,6 @@ def build_synapse_table():
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(description='--')
-
-    parser.add_argument(
-        '--task',
-        type=str,
-        help='task file to add',
-        required=False
-    )
-
-
 if __name__ == '__main__':
     create_database(secrets.DATABASE)
-    build_synapse_table()
+    # build_synapse_table()

@@ -16,32 +16,6 @@
       #logo {
           width: 400px;
       }
-      .img-circle {
-          height: 50px;
-          width: 50px;
-          position: relative;
-          top: -11px;
-      }
-      .profile-name {
-          color: white;
-        position: relative;
-        font-size: large;
-          top: -7px;
-          left: 5px;
-      }
-    .login-link {
-          color: white;
-        position: relative;
-        font-size: large;
-      }
-      .login-link:hover {
-          color: goldenrod;
-          text-decoration: none;
-      }
-      .profile-name:hover {
-          color: goldenrod;
-          text-decoration: none;
-      }
   </style>
   <body>
     <div class="navbar navbar-default">
@@ -51,17 +25,6 @@
               <img id="logo" src="{{ url_for('static', filename='uw-logo.png') }}" alt="UW">
           </div>
         </div>
-
-        <p class="navbar-text navbar-right">
-        {% if session.profile %}
-            {% if session.profile.image %}
-              <img class="img-circle" src="{{session.profile.image.url}}" width="24">
-            {% endif %}
-          <a class="profile-name" href="/logout">Logout</a>
-        {% else %}
-            <a class="login-link" href="/oauth2authorize">Login</a>
-        {% endif %}
-        </p>
       </div>
     </div>
     <div class="container">

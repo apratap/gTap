@@ -6,10 +6,14 @@ from multiprocessing import Pipe, Process
 import os
 from pytz import timezone as tz
 import socket
+from ssl import SSLError
+import sys
 import time
+
 
 import synapseclient
 from synapseclient import Column, Schema, Table
+from synapseclient.exceptions import SynapseHTTPError
 
 import app.config as secrets
 import app.model as model
@@ -37,7 +41,28 @@ def log(message):
         rmeow.strftime(secrets.DTFORMAT).upper(),
         f'{socket.gethostname()}: {message}'
     ]
-    syn.store(Table(LOG_SCHEMA, [data]))
+
+    def put():
+        syn.store(Table(LOG_SCHEMA, [data]))
+
+    def write_to_stdout(e):
+        msg = f'{data[0]}: log entry <{message}> failed to push with error {e}\n'
+        sys.stdout.write(msg)
+
+    retries, complete = 10, False
+    while not complete and retries > 0:
+        try:
+            put()
+            complete = True
+        except SSLError:
+            write_to_stdout('SSLError')
+        except SynapseHTTPError:
+            write_to_stdout('SynapseHTTPError')
+        except Exception as e:
+            write_to_stdout(str(e))
+
+        retries -= 1
+        time.sleep(3)
 
 
 def build_synapse_log():
@@ -109,6 +134,12 @@ def main():
     agent.start()
 
 
+def empty_tmp_dir():
+    files = os.listdir(secrets.ARCHIVE_AGENT_TMP_DIR)
+    for f in files:
+        os.remove(os.path.join(secrets.ARCHIVE_AGENT_TMP_DIR, f))
+
+
 class ArchiveAgent(object):
     def __init__(self, conn, keep_alive=True, wait_time=None):
         if wait_time is None:
@@ -128,6 +159,9 @@ class ArchiveAgent(object):
             args=(self.wait_time, self.conn, self.keep_alive, self.__sigkill, self.__done)
         )
         self.__agent.name = 'ArchiveAgent'
+
+        if not os.path.exists(secrets.ARCHIVE_AGENT_TMP_DIR):
+            os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
 
     def start_async(self):
         if not self.__agent.is_alive():
@@ -163,8 +197,9 @@ class ArchiveAgent(object):
                 with model.session_scope(conn) as s:
                     pending = model.get_all_pending(session=s)
 
-                    if len(pending) > 0:
-                        log(f'found {len(pending)} tasks to process')
+                    n = len(pending)
+                    if n > 0:
+                        log(f'found {n} task{"s" if n > 1 else ""} to process')
 
                     while len(pending) > 0:
                         consent = pending.pop()
@@ -202,7 +237,12 @@ class ArchiveAgent(object):
                             else:
                                 pass
 
-                            log(f'archival task for {str(consent)} completed')
+                            log(f'archival task for {str(consent)} completed '
+                                f'{"with errors" if not search or not location else "successfully"}')
+
+                        del task
+
+                    empty_tmp_dir()
 
                 terminate = sigkill.poll(1)
                 if not terminate:
