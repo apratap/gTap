@@ -1,11 +1,14 @@
+import datetime as dt
 from io import BytesIO
 import json
 import logging
+from multiprocessing.dummy import Pool as TPool
 import os
 from zipfile import ZipFile
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession
+import numpy as np
 import pandas as pd
 import sendgrid
 from sendgrid.helpers.mail import *
@@ -26,7 +29,7 @@ class TakeOutExtractor(object):
         self.bio = None
         self.to_zipfile = None
         self.to_search_file = None
-        self.to_location_file = None
+        self.to_location_file = []
         self.error = None
         self.errorMessage = None
         self.logger = logging.getLogger('Takeout Processing log')
@@ -107,7 +110,7 @@ class TakeOutExtractor(object):
             search_results.sort_values(by='timeStamp', inplace=True)
             search_results.reset_index(inplace=True, drop=True)
 
-            filename = '%s_searchQueries.feath' % str(self.consent)
+            filename = os.path.join(config.ARCHIVE_AGENT_TMP_DIR, f'{str(self.consent)}_searchQueries.feath')
             search_results.to_feather(filename)
 
             self.to_search_file = filename
@@ -121,7 +124,8 @@ class TakeOutExtractor(object):
         if len(location_files) > 0:
             def write_json(count, f):
                 filename = '%s_%s_%s_LocationQueries.json' % (
-                    str(self.consent.pid), self.consent.ext_id, count + 1)
+                    str(self.consent.pid), self.consent.eid, count + 1)
+                filename = os.path.join(config.ARCHIVE_AGENT_TMP_DIR, filename)
 
                 with open(filename, 'wb') as out:
                     out.write(self.to_zipfile.open(f).read())
@@ -136,6 +140,22 @@ class TakeOutExtractor(object):
         else:
             raise Exception('location file not found in takeout data')
 
+    def clean_locations_files(self):
+        dfs = []
+        for fn in self.to_location_file:
+            dfs.append(clean_location_file(fn))
+
+        df = pd.concat(dfs, sort=False).sort_values(by='ts')
+
+        filename = os.path.join(
+            config.ARCHIVE_AGENT_TMP_DIR,
+            f'{str(self.consent.pid)}_{self.consent.eid}_LocationQueries.csv'
+        )
+        df.to_csv(filename, index=None)
+
+        self.to_location_file.append(filename)
+        return filename
+
     @staticmethod
     def upload_search_data(filename):
         result = syn.store(File(filename, parentId=config.SEARCH_SYNID))
@@ -148,12 +168,14 @@ class TakeOutExtractor(object):
                 description='This file was created by gTAP',
             )
         )
-        os.remove(filename)
 
         return synid
 
     @staticmethod
     def upload_location_data(filenames):
+        if not isinstance(filenames, list):
+            filenames = [filenames]
+
         results = []
         for f in filenames:
             result = syn.store(File(f, parentId=config.LOCATION_SYNID))
@@ -167,7 +189,6 @@ class TakeOutExtractor(object):
                 )
             )
             results.append(synid)
-            os.remove(f)
 
         return ', '.join(results)
 
@@ -202,7 +223,13 @@ class TakeOutExtractor(object):
                 try:
                     if self.consent.location_sid is None or len(self.consent.location_sid) == 0:
                         locations_files = self.get_locations_file()
-                        e2 = self.upload_location_data(locations_files)
+                        e2_raw = self.upload_location_data(locations_files)
+
+                        locations_files = self.clean_locations_files()
+                        print(f'processed clean location data: {str(locations_files)}')
+                        e2_clean = self.upload_location_data(locations_files)
+
+                        e2 = e2_raw + ', ' + e2_clean
                     else:
                         e2 = self.consent.location_sid
                 except Exception as e:
@@ -220,5 +247,57 @@ class TakeOutExtractor(object):
             return 'drive_not_ready'
 
 
-def parse_takeout_data():
-    pass
+def clean_location_file(file_name):
+    def arow(args):
+        idx, row = args
+
+        try:
+            j_ = js.activity[idx]
+
+            if isinstance(j_, float):
+                return np.nan
+
+            if len(j_) > 0:
+                result = j_[0]['activity'][0]['type']
+                return result
+            else:
+                return np.nan
+        except:
+            return np.nan
+
+    with open(file_name, 'r') as f:
+        js = json.load(f)
+
+    js = pd.DataFrame(js['locations'])
+
+    if 'verticalAccuracy' in js.columns:
+        js.drop(columns='verticalAccuracy', inplace=True)
+
+    if 'altitude' in js.columns:
+        js.drop(columns='altitude', inplace=True)
+
+    if 'heading' in js.columns:
+        js.drop(columns='heading', inplace=True)
+
+    if 'velocity' in js.columns:
+        js.drop(columns='velocity', inplace=True)
+
+    js.timestampMs = pd.to_datetime(js.timestampMs, unit='ms')
+
+    js.latitudeE7 = np.round(js.latitudeE7 / 10e6, 5)
+    js.longitudeE7 = np.round(js.longitudeE7 / 10e6, 5)
+
+    js['date'] = js.timestampMs.apply(dt.datetime.date)
+
+    if 'activity' in js.columns:
+        pool = TPool(config.CLEANING_THREADS)
+
+        js.activity = list(pool.map(arow, list(js.iterrows())))
+
+        pool.close()
+        pool.join()
+
+    js.rename(columns={'latitudeE7': 'lat', 'longitudeE7': 'lon', 'timestampMs': 'ts'}, inplace=True)
+
+    js = js.sort_values(by='ts')
+    return js

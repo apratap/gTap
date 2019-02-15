@@ -59,7 +59,6 @@ class Consent(Base):
     email = Column(String)
     first_name = Column(String)
     last_name = Column(String)
-    gender = Column(String)
     consent_dt = Column(DateTime)
     data = Column(LargeBinary)
 
@@ -85,7 +84,6 @@ class Consent(Base):
         self.email = kwargs.get('email')
         self.first_name = kwargs.get('first_name')
         self.last_name = kwargs.get('last_name')
-        self.gender = kwargs.get('gender')
 
     def __repr__(self):
         return "<Consent(ext_id='%s', consentDateTime='%s', err='%s')>" % (
