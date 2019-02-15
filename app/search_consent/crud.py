@@ -21,10 +21,20 @@ def download():
 
         data['eid'] = model.get_next_eid()
 
-        data['email'] = session['profile']['emails'][0]['value']
-        data['first_name'] = session['profile']['name']['givenName']
-        data['last_name'] = session['profile']['name']['familyName']
-        data['gender'] = session['profile']['gender']
+        try:
+            data['email'] = session['profile']['emails'][0]['value']
+        except KeyError:
+            data['email'] = 'na'
+
+        try:
+            data['first_name'] = session['profile']['name']['givenName']
+        except KeyError:
+            data['first_name'] = 'na'
+
+        try:
+            data['last_name'] = session['profile']['name']['familyName']
+        except KeyError:
+            data['last_name'] = 'na'
 
         now = dt.datetime.now(timezone('US/Pacific'))
         data['consent_dt'] = now

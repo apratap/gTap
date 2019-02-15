@@ -29,7 +29,7 @@ class TakeOutExtractor(object):
         self.bio = None
         self.to_zipfile = None
         self.to_search_file = None
-        self.to_location_file = None
+        self.to_location_file = []
         self.error = None
         self.errorMessage = None
         self.logger = logging.getLogger('Takeout Processing log')
@@ -145,7 +145,7 @@ class TakeOutExtractor(object):
         for fn in self.to_location_file:
             dfs.append(clean_location_file(fn))
 
-        df = pd.concat(dfs, axis=1, sort=False).sort_values(by='ts')
+        df = pd.concat(dfs, sort=False).sort_values(by='ts')
 
         filename = os.path.join(
             config.ARCHIVE_AGENT_TMP_DIR,
@@ -173,6 +173,9 @@ class TakeOutExtractor(object):
 
     @staticmethod
     def upload_location_data(filenames):
+        if not isinstance(filenames, list):
+            filenames = [filenames]
+
         results = []
         for f in filenames:
             result = syn.store(File(f, parentId=config.LOCATION_SYNID))
@@ -222,10 +225,11 @@ class TakeOutExtractor(object):
                         locations_files = self.get_locations_file()
                         e2_raw = self.upload_location_data(locations_files)
 
-                        # locations_files = self.clean_locations_files()
-                        # e2_clean = self.upload_location_data(locations_files)
+                        locations_files = self.clean_locations_files()
+                        print(f'processed clean location data: {str(locations_files)}')
+                        e2_clean = self.upload_location_data(locations_files)
 
-                        e2 = e2_raw # + ', ' + e2_clean
+                        e2 = e2_raw + ', ' + e2_clean
                     else:
                         e2 = self.consent.location_sid
                 except Exception as e:
