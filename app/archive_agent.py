@@ -326,7 +326,7 @@ class TakeOutExtractor(object):
                     f'{len(location_files)} location part(s) for eid={self.consent.eid} downloaded successfully'
                 )
 
-                return True # self.clean_gps()
+                return self.clean_gps()
             else:
                 self.consent.add_location_error(
                     f'location files for eid={self.consent.eid} not found in takeout data'
