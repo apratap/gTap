@@ -8,12 +8,12 @@ import os
 oauth2 = UserOAuth2()
 
 
-def create_app(config, debug=False, testing=False, config_overrides=None):
+def create_app(config, ssl=True, debug=False, testing=False, config_overrides=None):
     app = Flask(__name__, static_folder=os.path.abspath('./static'))
 
     app.config.from_object(config)
 
-    if not debug:
+    if ssl:
         sslify = SSLify(app)
 
     app.debug = debug
