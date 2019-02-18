@@ -1,9 +1,9 @@
 import datetime as dt
-from functools import wraps
-from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
+from flask import Blueprint, redirect, render_template, request, session
+from multiprocessing import Process
 from pytz import timezone
 
-import app.model as model
+import app.context as ctx
 from app.search_consent import oauth2
 
 crud = Blueprint('crud', __name__)
@@ -18,8 +18,6 @@ def download():
 
     if request.method == 'POST':
         data = request.form.to_dict(flat=True)
-
-        data['eid'] = model.get_next_eid()
 
         try:
             data['email'] = session['profile']['emails'][0]['value']
@@ -41,8 +39,10 @@ def download():
 
         data['credentials'] = session['google_oauth2_credentials']
 
-        model.put_consent_to_synapse(data)
-        model.add_task(data)
+        # this is bad, i'm leaving a zombie process for the os to cleanup.
+        # it does, but ideally we would have a application level task manager
+        # do this... i.e. celery
+        Process(target=ctx.add_task, args=(data,)).start()
 
         return redirect('https://takeout.google.com')
 
