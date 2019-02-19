@@ -49,9 +49,6 @@ class ArchiveAgent(object):
         if not os.path.exists(secrets.ARCHIVE_AGENT_TMP_DIR):
             os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
 
-    def __del__(self):
-        self.terminate()
-
     def get_pid(self):
         return self.__agent.pid
 
@@ -127,7 +124,9 @@ class ArchiveAgent(object):
                     pass
 
             except Exception as e:
-                ctx.add_log_entry(f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}')
+                ctx.add_log_entry(
+                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}'
+                )
 
                 if not keep_alive:
                     ctx.add_log_entry('agent shutting down')
@@ -241,8 +240,8 @@ class TakeOutExtractor(object):
                         t = dt.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%fZ')
                     except ValueError:
                         t = dt.datetime.strptime(x, '%Y-%m-%dT%H:%M:%SZ')
-                    except Exception as e:
-                        raise e
+                    except Exception as ex:
+                        raise ex
 
                     return t
 
@@ -445,7 +444,7 @@ def parse_google_location_data(filename):
                 return result
             else:
                 return np.nan
-        except:
+        except Exception:
             return np.nan
 
     with open(filename, 'r') as f:

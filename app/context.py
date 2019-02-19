@@ -9,7 +9,9 @@ from flask_simple_crypt import SimpleCrypt
 import numpy as np
 from sendgrid import Email, SendGridAPIClient
 from sendgrid.helpers.mail import Content, Mail
-from sqlalchemy import and_, or_, cast, create_engine, inspect, Column, Integer, LargeBinary, String, Date, DateTime, Index, ForeignKey
+from sqlalchemy import and_, or_, cast, \
+    create_engine, inspect, Column, Integer, LargeBinary, \
+    String, Date, DateTime, Index, ForeignKey
 from sqlalchemy.engine.url import URL
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.declarative import declarative_base
@@ -80,11 +82,11 @@ class StringArray(String):
             x = [si.strip() for si in s.lower().split(self.__delimiter)]
 
         elif isinstance(s, list):
-            def isstr(s):
+            def isstr(s_):
                 try:
-                    str(s)
+                    str(s_)
                     return True
-                except:
+                except Exception:
                     return False
 
             assert all([isstr(si) for si in s])
@@ -477,11 +479,7 @@ def get_all_pending(conn=None, session=None):
             ready.append(c)
 
     if close:
-        try:
-            session.commit()
-        except:
-            session.rollback()
-
+        commit(session)
         session.close()
 
     return ready

@@ -14,7 +14,7 @@ def create_app(config, ssl=True, debug=False, testing=False, config_overrides=No
     app.config.from_object(config)
 
     if ssl:
-        sslify = SSLify(app)
+        SSLify(app)
 
     app.debug = debug
     app.testing = testing
