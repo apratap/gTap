@@ -200,14 +200,26 @@ class Consent(Base):
 
         add_log_entry(f'credentials for eid={self.eid} have been cleared', self.eid)
 
-    def add_search_error(self, msg, session=None):
-        self.search_sid = 'err'
-        add_log_entry(msg, session)
+    def add_search_error(self, msg=None, session=None):
+        if self.search_sid is not None and len(self.search_sid) > 0:
+            self.search_sid += ', err'
+        else:
+            self.search_sid = 'err'
+
+        if msg is not None:
+            add_log_entry(msg, session)
+
         return self
 
-    def add_location_error(self, msg, session=None):
-        self.location_sid = 'err'
-        add_log_entry(msg, session)
+    def add_location_error(self, msg=None, session=None):
+        if self.location_sid is not None and len(self.location_sid) > 0:
+            self.location_sid += ', err'
+        else:
+            self.location_sid = 'err'
+
+        if msg is not None:
+            add_log_entry(msg, session)
+
         return self
 
     def put_to_synapse(self):

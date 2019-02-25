@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-    <form method="POST" enctype="multipart/form-data">
+    <form id="takeout-form" method="POST" enctype="multipart/form-data">
         <div class="form-group">
             <label class="form-label">Participant Id:</label>
             <input class="form-element form-control"
@@ -17,18 +17,55 @@
             Please read these directions carefully before proceeding to the next page. Clicking the 'Takeout' button
             below will redirect this page to the Google Takeout tool. On this page we need you to perform the operations
             listed below. We recommend either taking a screenshot of the directions or holding your 'cntrl' key when
-            clicking the button to open the link in a new tab. Redirecting to the Takeout page may take several seconds.
+            clicking the button to open the link in a new tab.
         </p>
-        <ol>
-            <li>Click the button <em>SELECT NONE</em></li>
-            <li>Flip the switch for <em>Location History</em> to enabled</li>
-            <li>Flip the switch for <em>Search Contributions</em> to enabled</li>
-            <li>Click the button <em>NEXT</em></li>
-            <li>Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em></li>
-            <li>Click the button <em>CREATE ARCHIVE</em></li>
+
+        <ol id="directions-list">
+            <li>
+                Click the button <em>SELECT NONE</em>
+                <img id="directions-1" class="directions" src="{{ url_for('static', filename='directions_1.PNG') }}" alt="d1">
+            </li>
+            <li>
+                Scroll to down and flip the switch for <em>Location History</em> to enable it
+                <img id="directions-2" class="directions" src="{{ url_for('static', filename='directions_2.PNG') }}" alt="d2">
+            </li>
+            <li>
+                Scroll and flip the switch for <em>My Activity</em> to enable it
+                <img id="directions-3" class="directions" src="{{ url_for('static', filename='directions_3.PNG') }}" alt="d3">
+            </li>
+            <li>Click the drop down carat to the left of the switch to see options for My Activity</li>
+            <li>
+                Click <em>Select specific activity data</em>. A window will open showing you the types of data to contribute
+                <img id="directions-4" class="directions" src="{{ url_for('static', filename='directions_4.PNG') }}" alt="d4">
+            </li>
+            <li>
+                Click the box next to 'Toggle all' to deselect all options
+            </li>
+            <li>
+                Scroll down and check the box next to <em>search</em>
+            </li>
+            <li>
+                Click <em>OK</em>
+            </li>
+            <li>
+                Underneath the grey 'ACTIVITY DATA' button you'll see HTML and a drop down caret. Click the caret and select JSON
+                <img id="directions-8" class="directions" src="{{ url_for('static', filename='directions_8.PNG') }}" alt="d8">
+            </li>
+            <li>
+                Scroll to the bottom of the page and click the <img class="inline-button" src="{{ url_for('static', filename='directions_7.PNG') }}" alt="d7"> button
+            </li>
+            <li>
+                Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em>
+                <img id="directions-10" class="directions" src="{{ url_for('static', filename='directions_10.PNG') }}" alt="d10">
+            </li>
+            <li>
+                Click <img class="inline-button" src="{{ url_for('static', filename='create_archive.PNG') }}" alt="create-archive">
+            </li>
         </ol>
 
-        <button type="submit" class="btn btn-success">Takeout</button>
+        <button id="takeout-button" type="submit" class="btn btn-success">Proceed to Takeout</button>
+
+    <div style="height: 50px"></div>
     </form>
 
     <style>
@@ -48,6 +85,36 @@
             margin-right: 5px;
             font-size: 18px;
             font-style: italic;
+        }
+        #takeout-form {
+            max-width: 1200px;
+        }
+        #takeout-button {
+            margin: 10px 10px;
+            height: 45px;
+            font-size: 20px;
+            font-weight: bold;
+            width: 100%;
+        }
+        #directions-list {
+            font-weight: bold;
+            font-size: large;
+        }
+        #directions-list li {
+            margin: 15px 0;
+        }
+        .directions {
+            width: 525px;
+            display: block;
+            border: 1px solid grey;
+            box-shadow: 7px 7px 3px #888888;
+            margin: 10px 0;
+            border-radius: 5px;
+            padding: 10px;
+        }
+        .inline-button {
+            margin: 0 5px;
+            height: 45px;
         }
     </style>
 
