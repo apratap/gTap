@@ -5,14 +5,18 @@ import datetime as dt
 import gc
 from io import BytesIO
 import json
+import multiprocessing as mul
 from multiprocessing import Pipe, Process
 from multiprocessing.dummy import Pool as TPool
 import os
+import signal
+from subprocess import check_output, CalledProcessError
 import time
 from zipfile import ZipFile
 
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession
+import google.cloud.dlp as dlp
 from jinja2 import Template
 import pandas as pd
 import numpy as np
@@ -24,6 +28,8 @@ import app.config as secrets
 import app.context as ctx
 
 syn = secrets.syn
+
+__dlp = dlp.DlpServiceClient()
 
 
 class ArchiveAgent(object):
@@ -39,12 +45,14 @@ class ArchiveAgent(object):
         self.conn = conn
         self.keep_alive = keep_alive
 
+        self.__digest_date = dt.date.today()
+
         self.__sigkill, self.__done = Pipe()
         self.__agent = Process(
+            name=secrets.ARCHIVE_AGENT_PROC_NAME,
             target=self.__run_agent,
             args=(self.wait_time, self.conn, self.keep_alive, self.__sigkill, self.__done)
         )
-        self.__agent.name = 'ArchiveAgent'
 
         if not os.path.exists(secrets.ARCHIVE_AGENT_TMP_DIR):
             os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
@@ -56,6 +64,11 @@ class ArchiveAgent(object):
         return f'archive agent <pid={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
 
     def start_async(self):
+        # kill any existing agents
+        agents = get_existing_agents()
+        for pid in agents:
+            os.kill(pid, signal.SIGKILL)
+
         if not self.__agent.is_alive():
             self.__agent.start()
         else:
@@ -75,13 +88,20 @@ class ArchiveAgent(object):
             pass
 
         self.__done.recv()
+        self.__agent.join()
         ctx.add_log_entry('agent terminated gracefully')
 
-        self.__agent.join()
+    def send_digest(self):
+        # check for digest send
+        now = dt.date.today()
+        if (now - self.__digest_date).days > 0:
+            send_daily_digest()
+            self.__digest_date = now
+        else:
+            pass
 
-    @staticmethod
-    def __run_agent(wait_time, conn, keep_alive, sigkill, done):
-        terminate, digest_date = False, dt.date.today()
+    def __run_agent(self, wait_time, conn, keep_alive, sigkill, done):
+        terminate = False
 
         while not terminate:
             try:
@@ -99,13 +119,15 @@ class ArchiveAgent(object):
                         consent = pending.pop()
                         ctx.add_log_entry(f'starting task for {str(consent)}', cid=consent.eid)
 
-                        task = TakeOutExtractor(consent)
-                        task.run()
+                        try:
+                            task = TakeOutExtractor(consent)
+                            task.run()
 
-                        consent.update_synapse()
-
-                        del task, consent
-                        gc.collect()
+                            del task, consent
+                            gc.collect()
+                        except Exception as e:
+                            consent.update_synapse()
+                            raise e
 
                 # check for termination
                 terminate = sigkill.poll(1)
@@ -115,14 +137,7 @@ class ArchiveAgent(object):
                 else:
                     pass
 
-                # check for digest send
-                now = dt.date.today()
-                if (now-digest_date).days > 0:
-                    send_daily_digest()
-                    digest_date = now
-                else:
-                    pass
-
+                self.send_digest()
             except Exception as e:
                 ctx.add_log_entry(
                     f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}'
@@ -197,6 +212,9 @@ class TakeOutExtractor(object):
             return AuthorizedSession(credentials)
         except TypeError as e:
             if any(['NoneType' in a for a in e.args]):
+                self.consent.add_search_error()
+                self.consent.add_location_error()
+
                 self.__log_it('cannot authorize session without credentials')
                 return None
             else:
@@ -270,16 +288,17 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'search_{str(self.consent.eid)}.csv'
+                    f'search_raw_{str(self.consent.eid)}.csv'
                 )
                 search_queries.to_csv(filename, index=None)
 
                 self.__tmp_files.append({
-                    'type': 'search',
+                    'type': 'search_raw',
                     'path': filename
                 })
                 self.__log_it(f'searches for eid={self.consent.eid} downloaded successfully')
-                return True
+
+                return self.clean_search(filename)
             else:
                 self.consent.add_search_error(
                     f'search file for {self.consent.eid} not found in takeout data'
@@ -289,6 +308,40 @@ class TakeOutExtractor(object):
             self.consent.add_search_error(
                 f'downloading searches for eid={self.consent.eid} failed with error={str(e)}'
             )
+            return False
+
+    def clean_search(self):
+        try:
+            dfs = [
+                pd.read_csv(f['path'])
+                for f in self.__tmp_files if f['type'] == 'search_raw'
+            ]
+
+            if len(dfs) == 1:
+                df = dfs[0]
+            elif len(dfs) > 1:
+                df = pd.concat(dfs, axis=0, sort=False)
+            else:
+                return False
+
+            df_ = df.loc[df.action == 'Searched']
+
+            redacted = make_dlp_request(df_)
+
+            filename = os.path.join(
+                secrets.ARCHIVE_AGENT_TMP_DIR,
+                f'search_redacted_{str(self.consent.eid)}.csv'
+            )
+            self.__tmp_files.append({
+                'type': 'search_redacted',
+                'path': filename
+            })
+            redacted.to_csv(filename, index=None)
+
+            self.__log_it(f'searches for eid={self.consent.eid} redacted through DLP successfully')
+            return True
+        except Exception as e:
+            self.consent.add_search_error(f'DLP cleaning eid={self.consent.eid} failed with error={str(e)}')
             return False
 
     def extract_gps(self):
@@ -339,24 +392,29 @@ class TakeOutExtractor(object):
 
     def clean_gps(self):
         try:
-            dfs = []
-            for fn in [f for f in self.__tmp_files if f['type'] == 'gps_part']:
-                dfs.append(parse_google_location_data(fn['path']))
+            parts, dfs = [f for f in self.__tmp_files if f['type'] == 'gps_part'], []
 
-            df = pd.concat(dfs, sort=False).sort_values(by='ts')
+            if len(parts) > 0:
+                for fn in parts:
+                    dfs.append(parse_google_location_data(fn['path']))
 
-            filename = os.path.join(
-                secrets.ARCHIVE_AGENT_TMP_DIR,
-                f'GPS_{self.consent.pid}_{self.consent.eid}.csv'
-            )
-            df.to_csv(filename, index=None)
+                df = pd.concat(dfs, sort=False).sort_values(by='ts')
 
-            self.__tmp_files.append({
-                'type': 'gps',
-                'path': filename
-            })
-            self.__log_it(f'parsing location data for eid={self.consent.eid} completed successfully')
-            return True
+                filename = os.path.join(
+                    secrets.ARCHIVE_AGENT_TMP_DIR,
+                    f'GPS_{self.consent.pid}_{self.consent.eid}.csv'
+                )
+                df.to_csv(filename, index=None)
+
+                self.__tmp_files.append({
+                    'type': 'gps_processed',
+                    'path': filename
+                })
+                self.__log_it(f'parsing location data for eid={self.consent.eid} completed successfully')
+
+                return True
+            else:
+                return False
         except Exception as e:
             self.consent.add_location_error(
                 f'parsing location data for eid={str(self.consent.eid)} failed with error={str(e)}'
@@ -369,13 +427,13 @@ class TakeOutExtractor(object):
         for tmp in self.__tmp_files:
             t, path = tmp['type'], tmp['path']
 
-            if t not in ['gps', 'gps_part', 'search']:
+            if t not in ['gps_processed', 'search_redacted']:
                 continue
 
-            if t in ['gps', 'gps_part']:
+            if t in ['gps_processed']:
                 parent = secrets.LOCATION_SYNID
                 setter = self.consent.set_location_sid
-            elif t == 'search':
+            elif t in ['search_redacted']:
                 parent = secrets.SEARCH_SYNID
                 setter = self.consent.set_search_sid
             else:
@@ -415,6 +473,8 @@ class TakeOutExtractor(object):
                 self.__log_it(f'task for eid={self.consent.eid} completed. {cnt} files uploaded to Synapse')
 
                 self.consent.clear_credentials()
+
+                time.sleep(3)
                 self.consent.notify_participant()
             else:
                 pass
@@ -518,6 +578,53 @@ def send_daily_digest(conn=None):
     response = sg.client.mail.send.post(request_body=mail.get())
 
     return response.status_code
+
+
+def get_existing_agents():
+    try:
+        return map(int, str(check_output(['pgrep', secrets.ARCHIVE_AGENT_PROC_NAME]))[2:-3].split('\\n'))
+    except CalledProcessError:
+        return []
+
+
+def make_dlp_request(searches):
+    def inspect_wrapper(args):
+        idx, x = args
+
+        response = __dlp.inspect_content(
+            parent=parent,
+            inspect_config=secrets.DLP_INSPECT_CONFIG,
+            item={'value': x}
+        )
+        return idx, x, response
+
+    def process_results(args):
+        idx, x, response = args
+
+        findings = response.result.findings
+        if findings is not None and len(findings) > 0:
+            for finding in findings:
+                x = x.replace(finding.quote, finding.info_type.name)
+
+        return idx, x
+
+    parent = __dlp.project_path(secrets.DLP_PROJECT)
+
+    # run each query through DLP
+    pool = TPool(mul.cpu_count())
+    results = pool.map(
+        inspect_wrapper,
+        [(idx, q.title) for idx, q in list(searches.iterrows())[:2]]
+    )
+
+    # process the results
+    redacted = list(pool.map(process_results, results))
+    pool.close()
+
+    # replace the searches with redacted
+    idx, redacted = [i[0] for i in redacted], [i[1] for i in redacted]
+    searches.loc[idx, 'title'] = redacted
+    return searches
 
 
 def main():
