@@ -9,8 +9,6 @@ import multiprocessing as mul
 from multiprocessing import Pipe, Process
 from multiprocessing.dummy import Pool as TPool
 import os
-import signal
-from subprocess import check_output, CalledProcessError
 import time
 from zipfile import ZipFile
 
@@ -30,6 +28,8 @@ import app.context as ctx
 syn = secrets.syn
 
 __dlp = dlp.DlpServiceClient()
+
+DRIVE_NOT_READY = 'drive not ready'
 
 
 class ArchiveAgent(object):
@@ -64,11 +64,6 @@ class ArchiveAgent(object):
         return f'archive agent <pid={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
 
     def start_async(self):
-        # kill any existing agents
-        agents = get_existing_agents()
-        for pid in agents:
-            os.kill(pid, signal.SIGKILL)
-
         if not self.__agent.is_alive():
             self.__agent.start()
         else:
@@ -109,24 +104,20 @@ class ArchiveAgent(object):
 
                 # process tasks
                 with ctx.session_scope(conn) as s:
-                    pending = ctx.get_all_pending(session=s)
+                    pending = ctx.get_next_pending(session=s)
 
-                    n = len(pending)
-                    if n > 0:
-                        ctx.add_log_entry(f'found {n} task{"s" if n > 1 else ""} to process')
-
-                    while len(pending) > 0:
-                        consent = pending.pop()
-                        ctx.add_log_entry(f'starting task for {str(consent)}', cid=consent.eid)
+                    if pending is not None:
+                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.eid)
 
                         try:
-                            task = TakeOutExtractor(consent)
+                            task = TakeOutExtractor(pending)
                             task.run()
 
-                            del task, consent
+                            del task, pending
                             gc.collect()
                         except Exception as e:
-                            consent.update_synapse()
+                            pending.set_status(ctx.ConsentStatus.FAILED)
+                            pending.update_synapse()
                             raise e
 
                 # check for termination
@@ -191,7 +182,7 @@ class TakeOutExtractor(object):
                 self.__tid = df.id[df.timeStamp.idxmax()]
                 return self.__tid
             else:
-                return False
+                return DRIVE_NOT_READY
 
     @property
     def zipped(self):
@@ -463,7 +454,7 @@ class TakeOutExtractor(object):
         return cnt
 
     def run(self):
-        if self.takeout_id is not None:
+        if self.takeout_id != DRIVE_NOT_READY:
             if self.download_takeout_data() and any([
                 self.extract_searches(),
                 self.extract_gps()
@@ -473,20 +464,24 @@ class TakeOutExtractor(object):
                 self.__log_it(f'task for eid={self.consent.eid} completed. {cnt} files uploaded to Synapse')
 
                 self.consent.clear_credentials()
+                self.consent.set_status(ctx.ConsentStatus.COMPLETE)
 
                 time.sleep(3)
                 self.consent.notify_participant()
             else:
                 pass
         else:
+            self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
             self.__log_it(f'Google Drive for eid={self.consent.eid} not ready')
 
 
 def get_wait_time_from_env():
     if 'ARCHIVE_AGENT_WAIT_TIME' in os.environ:
         return float(os.environ['ARCHIVE_AGENT_WAIT_TIME'])
+    elif hasattr(secrets, 'ARCHIVE_AGENT_WAIT_TIME'):
+        return secrets.ARCHIVE_AGENT_WAIT_TIME
     else:
-        return None
+        return 3600  # 1 hour
 
 
 def parse_google_location_data(filename):
@@ -580,14 +575,7 @@ def send_daily_digest(conn=None):
     return response.status_code
 
 
-def get_existing_agents():
-    try:
-        return map(int, str(check_output(['pgrep', secrets.ARCHIVE_AGENT_PROC_NAME]))[2:-3].split('\\n'))
-    except CalledProcessError:
-        return []
-
-
-def make_dlp_request(searches):
+def make_dlp_request(df):
     def inspect_wrapper(args):
         idx, x = args
 
@@ -614,7 +602,7 @@ def make_dlp_request(searches):
     pool = TPool(mul.cpu_count())
     results = pool.map(
         inspect_wrapper,
-        [(idx, q.title) for idx, q in searches.iterrows()]
+        [(idx, q.title) for idx, q in df.iterrows()]
     )
 
     # process the results
@@ -623,8 +611,8 @@ def make_dlp_request(searches):
 
     # replace the searches with redacted
     idx, redacted = [i[0] for i in redacted], [i[1] for i in redacted]
-    searches.loc[idx, 'title'] = redacted
-    return searches
+    df.loc[idx, 'title'] = redacted
+    return df
 
 
 def main():
@@ -676,11 +664,11 @@ def main():
 
 if __name__ == '__main__':
     # build_synapse_log()
-    # main()
-
-    searches = pd.DataFrame(
-        ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
-        columns=['title']
-    )
-    make_dlp_request(searches)
+    main()
+    #
+    # searches = pd.DataFrame(
+    #     ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
+    #     columns=['title']
+    # )
+    # make_dlp_request(searches)
 

@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 import datetime as dt
+from enum import Enum
 import json
 from pytz import timezone as tz
 from ssl import SSLError
@@ -109,6 +110,14 @@ class StringArray(String):
             pass
 
 
+class ConsentStatus(Enum):
+    READY = 'ready'
+    PROCESSING = 'processing'
+    COMPLETE = 'complete'
+    FAILED = 'failed'
+    DRIVE_NOT_READY = 'drive_not_ready'
+
+
 class Consent(Base):
     __tablename__ = 'consent'
 
@@ -121,8 +130,9 @@ class Consent(Base):
     data = Column(LargeBinary)
     location_sid = Column(String)
     search_sid = Column(String)
+    status = Column(String)
 
-    logs = relationship("LogEntry", lazy='joined')
+    logs = relationship("LogEntry")
 
     Index('idx_eid', 'eid')
     Index('idx_dt', 'consent_dt')
@@ -164,13 +174,13 @@ class Consent(Base):
             'consent_dt': self.consent_dt,
             'location_sid': self.location_sid,
             'search_sid': self.search_sid,
-            'notes': [l.dict for l in self.logs]
+            'notes': [l.dict for l in self.logs],
+            'status': self.status
         }
 
     @property
     def notes(self):
         logs = sorted(self.logs, key=lambda x: x.ts)
-
         return '  ' + str(logs[0]) + '\n  ' + '\n  '.join([
             str(entry) for entry in logs[1:]
         ])
@@ -182,6 +192,14 @@ class Consent(Base):
     @hybrid_property
     def hours_since_consent(self):
         return np.ceil((dt.datetime.now()-self.consent_dt).seconds/3600)
+
+    def seconds_since_last_drive_attempt(self):
+        logs = sorted(self.logs, key=lambda x: x.ts, reverse=True)
+        logs = [l for l in logs if 'Google Drive' in l.msg and 'not ready' in l.msg]
+        if len(logs) > 0:
+            return (dt.datetime.now(tz('utc')) - tz('utc').localize(logs[0].ts)).total_seconds()
+        else:
+            return -1
 
     @staticmethod
     def __encrypt(data):
@@ -209,6 +227,7 @@ class Consent(Base):
         if msg is not None:
             add_log_entry(msg, session)
 
+        self.set_status(ConsentStatus.FAILED)
         return self
 
     def add_location_error(self, msg=None, session=None):
@@ -220,6 +239,7 @@ class Consent(Base):
         if msg is not None:
             add_log_entry(msg, session)
 
+        self.set_status(ConsentStatus.FAILED)
         return self
 
     def put_to_synapse(self):
@@ -290,6 +310,9 @@ class Consent(Base):
         commit(session)
 
         self.update_synapse()
+
+    def set_status(self, status):
+        self.status = status.value
 
     def notify_participant(self):
         from_ = Email(secrets.FROM_STUDY_EMAIL)
@@ -413,6 +436,7 @@ def build_synapse_table():
 # ------------------------------------------------------
 def add_task(data, conn=None, session=None):
     consent = Consent(**data)
+    consent.set_status(ConsentStatus.READY)
 
     if session is not None:
         consent = add_entity(session, consent)
@@ -469,7 +493,7 @@ def add_log_entry(entry, cid=None, session=None):
     return add_entity(session, entry)
 
 
-def get_all_pending(conn=None, session=None):
+def get_next_pending(conn=None, session=None):
     if session is None:
         session = session_scope(conn)
         close = True
@@ -477,24 +501,28 @@ def get_all_pending(conn=None, session=None):
         close = False
 
     pending = session.query(Consent).filter(or_(
-        Consent.location_sid == None,
-        Consent.search_sid == None)
-    ).order_by(Consent.consent_dt.desc()).all()
+            Consent.status == ConsentStatus.READY.value,
+            Consent.status == ConsentStatus.DRIVE_NOT_READY.value
+        )
+    ).order_by(Consent.consent_dt.desc()).with_for_update().first()
 
-    ready = []
-    for c in pending:
-        if c.hours_since_consent > 24:
-            c.clear_credentials()
-            c.add_location_error('credentials expired', session=session)
-            c.add_search_error('credentials expired', session=session)
-        else:
-            ready.append(c)
+    ready = False
+    if pending is not None and not \
+            (pending.status == ConsentStatus.DRIVE_NOT_READY.value and
+             pending.seconds_since_last_drive_attempt() > secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY):
+        pending.set_status(ConsentStatus.PROCESSING)
+        ready = True
+    else:
+        pass
+
+    commit(session)
 
     if close:
-        commit(session)
         session.close()
+    else:
+        pass
 
-    return ready
+    return pending if ready else None
 
 
 def get_consent(pid, eid, session):
