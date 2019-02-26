@@ -590,16 +590,28 @@ def make_dlp_request(df):
         idx, x, response = args
 
         findings = response.result.findings
+        info_types, likelihoods, redactions = [], [], []
+
         if findings is not None and len(findings) > 0:
             for finding in findings:
-                x = x.replace(finding.quote, finding.info_type.name)
+                info_type = finding.info_type.name
 
-        return idx, x
+                x = x.replace(finding.quote, info_type)
+                info_types.append(info_type)
+
+                lik = str(finding)
+                lik = lik[lik.find('likelihood') + 11:]
+                lik = lik[:lik.find('\n')].strip()
+                likelihoods.append(lik)
+
+                redactions.append('partial')
+
+        return idx, x, ', '.join(info_types), ', '.join(likelihoods), ', '.join(redactions)
 
     parent = __dlp.project_path(secrets.DLP_PROJECT)
 
     # run each query through DLP
-    pool = TPool(mul.cpu_count())
+    pool = TPool(secrets.CLEANING_THREADS)
     results = pool.map(
         inspect_wrapper,
         [(idx, q.title) for idx, q in df.iterrows()]
@@ -609,9 +621,14 @@ def make_dlp_request(df):
     redacted = list(pool.map(process_results, results))
     pool.close()
 
-    # replace the searches with redacted
-    idx, redacted = [i[0] for i in redacted], [i[1] for i in redacted]
-    df.loc[idx, 'title'] = redacted
+    new_cols = ['info_type', 'likelihood', 'redact']
+    for c in new_cols:
+        df[c] = ''
+
+    for item in redacted:
+        df.loc[item[0], 'title'] = item[1]
+        df.loc[item[0], new_cols] = item[2:]
+
     return df
 
 
@@ -664,11 +681,11 @@ def main():
 
 if __name__ == '__main__':
     # build_synapse_log()
-    main()
+    # main()
     #
-    # searches = pd.DataFrame(
-    #     ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
-    #     columns=['title']
-    # )
-    # make_dlp_request(searches)
+    searches = pd.DataFrame(
+        ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
+        columns=['title']
+    )
+    make_dlp_request(searches)
 
