@@ -298,7 +298,7 @@ class TakeOutExtractor(object):
                 })
                 self.__log_it(f'searches for eid={self.consent.eid} downloaded successfully')
 
-                return self.clean_search(filename)
+                return self.clean_search()
             else:
                 self.consent.add_search_error(
                     f'search file for {self.consent.eid} not found in takeout data'
