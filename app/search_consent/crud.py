@@ -1,29 +1,14 @@
 import datetime as dt
-from functools import wraps
-from flask import Blueprint, current_app, redirect, render_template, request, session, url_for
+from flask import Blueprint, redirect, render_template, request, session
+from multiprocessing import Process
 from pytz import timezone
 
-import app.model as model
+import app.context as ctx
 from app.search_consent import oauth2
 
 crud = Blueprint('crud', __name__)
 
 
-def ssl_required(fn):
-    @wraps(fn)
-    def decorated_view(*args, **kwargs):
-        if current_app.config.get('SSL'):
-            if request.is_secure:
-                return fn(*args, **kwargs)
-            else:
-                return redirect(request.url.replace('http://', 'https://'))
-
-        return fn(*args, **kwargs)
-
-    return decorated_view
-
-
-@ssl_required
 @crud.route('/download', methods=['GET', 'POST'])
 @oauth2.required
 def download():
@@ -34,20 +19,30 @@ def download():
     if request.method == 'POST':
         data = request.form.to_dict(flat=True)
 
-        data['guid'] = session['profile']['id']
-        data['guid_counter'] = model.get_next_guid_counter(data['guid'])
+        try:
+            data['email'] = session['profile']['emails'][0]['value']
+        except KeyError:
+            data['email'] = 'na'
 
-        data['email'] = session['profile']['emails'][0]['value']
-        data['first_name'] = session['profile']['name']['givenName']
-        data['last_name'] = session['profile']['name']['familyName']
-        data['gender'] = session['profile']['gender']
+        try:
+            data['first_name'] = session['profile']['name']['givenName']
+        except KeyError:
+            data['first_name'] = 'na'
+
+        try:
+            data['last_name'] = session['profile']['name']['familyName']
+        except KeyError:
+            data['last_name'] = 'na'
+
         now = dt.datetime.now(timezone('US/Pacific'))
         data['consent_dt'] = now
 
         data['credentials'] = session['google_oauth2_credentials']
 
-        model.put_consent_to_synapse(data)
-        model.add_task(data)
+        # this is bad, i'm leaving a zombie process for the os to cleanup.
+        # it does, but ideally we would have a application level task manager
+        # do this... i.e. celery
+        Process(target=ctx.add_task, args=(data,)).start()
 
         return redirect('https://takeout.google.com')
 
