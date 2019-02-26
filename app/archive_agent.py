@@ -614,7 +614,7 @@ def make_dlp_request(searches):
     pool = TPool(mul.cpu_count())
     results = pool.map(
         inspect_wrapper,
-        [(idx, q.title) for idx, q in list(searches.iterrows())[:2]]
+        [(idx, q.title) for idx, q in searches.iterrows()]
     )
 
     # process the results
@@ -676,4 +676,11 @@ def main():
 
 if __name__ == '__main__':
     # build_synapse_log()
-    main()
+    # main()
+
+    searches = pd.DataFrame(
+        ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
+        columns=['title']
+    )
+    make_dlp_request(searches)
+
