@@ -459,15 +459,18 @@ class TakeOutExtractor(object):
                 self.extract_searches(),
                 self.extract_gps()
             ]):
-                cnt = self.push_to_synapse()
+                try:
+                    cnt = self.push_to_synapse()
 
-                self.__log_it(f'task for eid={self.consent.eid} completed. {cnt} files uploaded to Synapse')
+                    self.consent.clear_credentials()
+                    self.consent.update_synapse()
+                    self.consent.notify_participant()
 
-                self.consent.clear_credentials()
-                self.consent.set_status(ctx.ConsentStatus.COMPLETE)
-
-                time.sleep(3)
-                self.consent.notify_participant()
+                    self.__log_it(f'task for eid={self.consent.eid} completed. {cnt} files uploaded to Synapse')
+                    self.consent.set_status(ctx.ConsentStatus.COMPLETE)
+                except Exception as e:
+                    self.consent.set_status(ctx.ConsentStatus.FAILED)
+                    ctx.add_log_entry(str(e), self.consent.eid)
             else:
                 pass
         else:
@@ -576,6 +579,8 @@ def send_daily_digest(conn=None):
 
 
 def make_dlp_request(df):
+    df = df.copy()
+
     def inspect_wrapper(args):
         idx, x = args
 
@@ -681,11 +686,10 @@ def main():
 
 if __name__ == '__main__':
     # build_synapse_log()
-    # main()
+    main()
     #
-    searches = pd.DataFrame(
-        ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
-        columns=['title']
-    )
-    make_dlp_request(searches)
-
+    # searches = pd.DataFrame(
+    #     ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
+    #     columns=['title']
+    # )
+    # make_dlp_request(searches)
