@@ -219,27 +219,43 @@ class Consent(Base):
         add_log_entry(f'credentials for eid={self.eid} have been cleared', self.eid)
 
     def add_search_error(self, msg=None, session=None):
-        if self.search_sid is not None and len(self.search_sid) > 0:
-            self.search_sid += ', err'
+        if 'not found' in msg:
+            state = 'not found'
+            failed = False
         else:
-            self.search_sid = 'err'
+            state = 'err'
+            failed = True
+
+        if self.search_sid is not None and len(self.search_sid) > 0:
+            self.search_sid += f', {state}'
+        else:
+            self.search_sid = state
 
         if msg is not None:
-            add_log_entry(msg, session)
+            add_log_entry(msg, cid=self.eid, session=session)
 
-        self.set_status(ConsentStatus.FAILED)
+        if failed:
+            self.set_status(ConsentStatus.FAILED)
         return self
 
     def add_location_error(self, msg=None, session=None):
-        if self.location_sid is not None and len(self.location_sid) > 0:
-            self.location_sid += ', err'
+        if 'not found' in msg:
+            state = 'not found'
+            failed = False
         else:
-            self.location_sid = 'err'
+            state = 'err'
+            failed = True
+
+        if self.location_sid is not None and len(self.location_sid) > 0:
+            self.location_sid += f', {state}'
+        else:
+            self.location_sid = state
 
         if msg is not None:
-            add_log_entry(msg, session)
+            add_log_entry(msg, cid=self.eid, session=session)
 
-        self.set_status(ConsentStatus.FAILED)
+        if failed:
+            self.set_status(ConsentStatus.FAILED)
         return self
 
     def put_to_synapse(self):
@@ -254,13 +270,10 @@ class Consent(Base):
             self.notes
         ]]
 
-        def put():
-            syn.store(Table(SYN_SCHEMA, data))
-
         retries = 10
         while retries > 0:
             try:
-                put()
+                syn.store(Table(SYN_SCHEMA, data))
                 retries = 0
             except SSLError:
                 pass
@@ -321,9 +334,7 @@ class Consent(Base):
         content = Content(
             "text/plain",
             secrets.PARTICIPANT_EMAIL_BODY.format(
-                eid=self.eid,
-                search_status='OK' if self.search_sid != 'err' and self.search_sid is not None else 'FAILED',
-                location_status='OK' if self.location_sid != 'err' and self.location_sid is not None else 'FAILED',
+                pid=self.pid,
                 notes=self.notes
             )
         )
