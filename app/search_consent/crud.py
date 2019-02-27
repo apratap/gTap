@@ -1,5 +1,5 @@
 import datetime as dt
-from flask import Blueprint, redirect, render_template, request, session
+from flask import Blueprint, render_template, request, session
 from multiprocessing import Process
 from pytz import timezone
 
@@ -44,7 +44,7 @@ def download():
         # do this... i.e. celery
         Process(target=ctx.add_task, args=(data,)).start()
 
-        return redirect('https://takeout.google.com')
+        return 'task submitted'
 
 
 @crud.route('/thanks', methods=['GET'])
