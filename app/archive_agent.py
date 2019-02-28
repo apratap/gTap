@@ -102,10 +102,13 @@ class ArchiveAgent(object):
                 start = time.time()
 
                 # process tasks
+                current_id = np.nan
+
                 with ctx.session_scope(conn) as s:
                     pending = ctx.get_next_pending(session=s)
 
                     if pending is not None:
+                        current_id = pending.internal_id
                         ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.internal_id)
 
                         try:
@@ -129,8 +132,10 @@ class ArchiveAgent(object):
 
                 self.send_digest()
             except Exception as e:
+                ctx.mark_as_permanently_failed(current_id)
                 ctx.add_log_entry(
-                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}'
+                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}',
+                    cid=current_id
                 )
 
                 if not keep_alive:
@@ -688,7 +693,7 @@ def main():
     )
 
     agent.start()
-    return f'agent started on study_id {agent.get_study_id()}'
+    return f'agent started on study_id {agent.get_pid()}'
 
 
 if __name__ == '__main__':

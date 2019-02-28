@@ -516,6 +516,27 @@ def add_log_entry(entry, cid=None, session=None):
     return add_entity(session, entry)
 
 
+def mark_as_permanently_failed(internal_id, session=None):
+    if internal_id == np.nan:
+        return
+
+    def get_n_commit(session_):
+        consent = session_.query(Consent).filter(
+            Consent.internal_id == internal_id
+        ).with_for_update().first()
+
+        if consent is not None:
+            consent.clear_credentials()
+            consent.set_status(ConsentStatus.FAILED)
+            commit(s)
+
+    if session is None:
+        with session_scope(None) as s:
+            get_n_commit(s)
+    else:
+        get_n_commit(session)
+
+
 def get_next_pending(conn=None, session=None):
     if session is None:
         session = session_scope(conn)
