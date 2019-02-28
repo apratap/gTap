@@ -6,10 +6,11 @@ from pytz import timezone as tz
 from ssl import SSLError
 import time
 
+from botocore.exceptions import ClientError
+import boto3
 from flask_simple_crypt import SimpleCrypt
+from jinja2 import Template
 import numpy as np
-from sendgrid import Email, SendGridAPIClient
-from sendgrid.helpers.mail import Content, Mail
 from sqlalchemy import and_, or_, cast, \
     create_engine, inspect, Column, Integer, LargeBinary, \
     String, Date, DateTime, Index, ForeignKey
@@ -35,18 +36,16 @@ Base = declarative_base()
 SYN_SCHEMA = Schema(
     name='Consents',
     columns=[
-        SynColumn(name='participant_id', columnType='STRING', maximumSize=31),
-        SynColumn(name='eid',          columnType='INTEGER'),
+        SynColumn(name='study_id',     columnType='STRING', maximumSize=31),
+        SynColumn(name='internal_id',  columnType='STRING'),
         SynColumn(name='consent_dt',   columnType='STRING', maximumSize=63),
-        SynColumn(name='location_sid', columnType='STRING', maximumSize=31),
-        SynColumn(name='search_sid',   columnType='STRING', maximumSize=31),
+        SynColumn(name='location_sid', columnType='STRING', maximumSize=127),
+        SynColumn(name='search_sid',   columnType='STRING', maximumSize=127),
         SynColumn(name='notes',        columnType='STRING', maximumSize=1000),
     ],
     parent=secrets.PROJECT_SYNID
 )
-BLANK_CONSENT = (
-    'blank', 0, 'blank', 'blank', 'blank', 'blank'
-)
+BLANK_CONSENT = ('blank', 0, 'blank', 'blank', 'blank', 'blank')
 
 
 class AppWrap(object):
@@ -121,8 +120,8 @@ class ConsentStatus(Enum):
 class Consent(Base):
     __tablename__ = 'consent'
 
-    eid = Column(Integer, primary_key=True, autoincrement=True)
-    pid = Column(String)
+    internal_id = Column(Integer, primary_key=True, autoincrement=True)
+    study_id = Column(String)
     email = Column(String)
     first_name = Column(String)
     last_name = Column(String)
@@ -134,11 +133,11 @@ class Consent(Base):
 
     logs = relationship("LogEntry")
 
-    Index('idx_eid', 'eid')
+    Index('idx_iid', 'iid')
     Index('idx_dt', 'consent_dt')
 
     def __init__(self, **kwargs):
-        self.pid = kwargs['participant_id']
+        self.study_id = kwargs['study_id']
         self.consent_dt = kwargs['consent_dt']
         self.data = self.__encrypt(kwargs['credentials'])
         self.location_sid = kwargs.get('location_sid')
@@ -148,13 +147,13 @@ class Consent(Base):
         self.last_name = kwargs.get('last_name')
 
     def __repr__(self):
-        return "<Consent(eid='%s', consentDateTime='%s')>" % (
-            f'{self.eid}',
+        return "<Consent(internal_id='%s', consentDateTime='%s')>" % (
+            f'{self.internal_id}',
             self.consent_dt.strftime(secrets.DTFORMAT)
         )
 
     def __str__(self):
-        return f'participant: {self.pid}, eid: {self.eid}'
+        return f'participant: {self.study_id}, internal_id: {self.internal_id}'
 
     @property
     def credentials(self):
@@ -166,8 +165,8 @@ class Consent(Base):
     @property
     def dict(self):
         return {
-            'eid': self.eid,
-            'pid': self.pid,
+            'internal_id': self.internal_id,
+            'study_id': self.study_id,
             'email': self.email,
             'first_name': self.first_name,
             'last_name': self.last_name,
@@ -216,7 +215,7 @@ class Consent(Base):
         session = inspect(self).session
         commit(session)
 
-        add_log_entry(f'credentials for eid={self.eid} have been cleared', self.eid)
+        add_log_entry(f'credentials for internal_id={self.internal_id} have been cleared', self.internal_id)
 
     def add_search_error(self, msg=None, session=None):
         if 'not found' in msg:
@@ -232,7 +231,7 @@ class Consent(Base):
             self.search_sid = state
 
         if msg is not None:
-            add_log_entry(msg, cid=self.eid, session=session)
+            add_log_entry(msg, cid=self.internal_id, session=session)
 
         if failed:
             self.set_status(ConsentStatus.FAILED)
@@ -252,7 +251,7 @@ class Consent(Base):
             self.location_sid = state
 
         if msg is not None:
-            add_log_entry(msg, cid=self.eid, session=session)
+            add_log_entry(msg, cid=self.internal_id, session=session)
 
         if failed:
             self.set_status(ConsentStatus.FAILED)
@@ -262,8 +261,8 @@ class Consent(Base):
         rmeow = dt.datetime.now(tz("US/Pacific")).strftime(secrets.DTFORMAT).upper()
 
         data = [[
-            self.pid,
-            self.eid,
+            self.study_id,
+            self.internal_id,
             rmeow,
             self.location_sid,
             self.search_sid,
@@ -280,7 +279,7 @@ class Consent(Base):
             except SynapseHTTPError:
                 pass
             except Exception as e:
-                add_log_entry(f'consent for eid={self.eid} failed to push to Synapse with error={str(e)}')
+                add_log_entry(f'consent for internal_id={self.internal_id} failed to push to Synapse with error={str(e)}')
                 retries = 0
 
             retries -= 1
@@ -289,8 +288,8 @@ class Consent(Base):
     def update_synapse(self):
         results = syn.tableQuery(
             f"select * from {secrets.CONSENTS_SYNID} "
-            f"where participant_id='{self.pid}'"
-            f"  and eid='{self.eid}'"
+            f"where study_id='{self.study_id}'"
+            f"  and internal_id='{self.internal_id}'"
         ).asDataFrame()
 
         if len(results) == 0:
@@ -328,31 +327,44 @@ class Consent(Base):
         self.status = status.value
 
     def notify_participant(self):
-        from_ = Email(secrets.FROM_STUDY_EMAIL)
-        to_ = Email(self.email)
-
-        content = Content(
-            "text/plain",
-            secrets.PARTICIPANT_EMAIL_BODY.format(
-                pid=self.pid,
-                notes=self.notes
+        try:
+            x = dict(
+                study_id=self.study_id,
+                logs=[str(log) for log in self.logs]
             )
-        )
+            template = Template(secrets.PARTICIPANT_EMAIL_BODY)
 
-        subject_ = secrets.PARTICIPANT_EMAIL_SUBJECT.format(eid=self.eid)
-        mail = Mail(from_, subject_, to_, content)
-
-        sg = SendGridAPIClient(apikey=secrets.SENDGRID_API_KEY)
-        response = sg.client.mail.send.post(request_body=mail.get())
-
-        return response.status_code
+            client = boto3.client('ses', region_name=secrets.REGION_NAME)
+            response = client.send_email(
+                Source=secrets.FROM_STUDY_EMAIL,
+                Destination={
+                    'ToAddresses': [secrets.TO_EMAIL]  # TODO: self.email
+                },
+                Message={
+                    'Subject': {
+                        'Data': secrets.PARTICIPANT_EMAIL_SUBJECT.format(internal_id=self.internal_id),
+                        'Charset': secrets.CHARSET
+                    },
+                    'Body': {
+                        'Html': {
+                            'Data': template.render(x=x),
+                            'Charset': secrets.CHARSET
+                        }
+                    }
+                },
+                ReplyToAddresses=[secrets.FROM_STUDY_EMAIL]
+            )
+        except ClientError as e:
+            raise Exception(f'email failed with error: {str(e.response["Error"]["Message"])}')
+        else:
+            return response
 
 
 class LogEntry(Base):
     __tablename__ = 'log'
 
     id = Column(Integer, autoincrement=True, primary_key=True)
-    cid = Column(ForeignKey('consent.eid'), nullable=True)
+    cid = Column(ForeignKey('consent.internal_id'), nullable=True)
     ts = Column(DateTime)
     msg = Column(String)
 
@@ -430,7 +442,7 @@ def build_synapse_table():
     table = Table(SYN_SCHEMA, values=[BLANK_CONSENT])
     table = syn.store(table)
 
-    results = syn.tableQuery("select * from %s where participant_id = '%s'" % (table.tableId, BLANK_CONSENT[0]))
+    results = syn.tableQuery("select * from %s where study_id = '%s'" % (table.tableId, BLANK_CONSENT[0]))
     syn.delete(results)
 
     syn.setProvenance(
@@ -536,9 +548,9 @@ def get_next_pending(conn=None, session=None):
     return pending if ready else None
 
 
-def get_consent(pid, eid, session):
+def get_consent(study_id, internal_id, session):
     c = session.query(Consent).filter(
-        and_(Consent.pid == pid, Consent.eid == eid)
+        and_(Consent.study_id == study_id, Consent.internal_id == internal_id)
     ).first()
 
     return c
@@ -555,11 +567,15 @@ def daily_digest(conn=None):
         n = len(consents)
         n_searches = sum([
             1 for c in consents
-            if c.search_sid is not None and c.search_sid != 'err'
+            if c.search_sid is not None and
+               'err' not in c.search_sid and
+               'not found' not in c.search_sid
         ])
         n_locations = sum([
             1 for c in consents
-            if c.location_sid is not None and c.location_sid != 'err'
+            if c.location_sid is not None and
+               'err' not in c.location_sid and
+               'not found' not in c.location_sid
         ])
 
         digest = {
@@ -581,6 +597,6 @@ def daily_digest(conn=None):
 
 
 if __name__ == '__main__':
-    pass
     # create_database(secrets.DATABASE)
-    # build_synapse_table()
+    build_synapse_table()
+    pass

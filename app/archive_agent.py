@@ -5,21 +5,20 @@ import datetime as dt
 import gc
 from io import BytesIO
 import json
-import multiprocessing as mul
 from multiprocessing import Pipe, Process
 from multiprocessing.dummy import Pool as TPool
 import os
 import time
 from zipfile import ZipFile
 
+from botocore.exceptions import ClientError
+import boto3
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession
 import google.cloud.dlp as dlp
 from jinja2 import Template
 import pandas as pd
 import numpy as np
-from sendgrid import Email, SendGridAPIClient
-from sendgrid.helpers.mail import Content, Mail, Personalization
 from synapseclient import File, Activity
 
 import app.config as secrets
@@ -61,7 +60,7 @@ class ArchiveAgent(object):
         return self.__agent.pid
 
     def get_status(self):
-        return f'archive agent <pid={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
+        return f'archive agent <study_id={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
 
     def start_async(self):
         if not self.__agent.is_alive():
@@ -107,7 +106,7 @@ class ArchiveAgent(object):
                     pending = ctx.get_next_pending(session=s)
 
                     if pending is not None:
-                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.eid)
+                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.internal_id)
 
                         try:
                             task = TakeOutExtractor(pending)
@@ -212,7 +211,7 @@ class TakeOutExtractor(object):
                 self.__log_it('failed to authorize participant http session')
 
     def __log_it(self, s):
-        ctx.add_log_entry(s, cid=self.consent.eid)
+        ctx.add_log_entry(s, cid=self.consent.internal_id)
 
     def download_takeout_data(self):
         try:
@@ -226,7 +225,7 @@ class TakeOutExtractor(object):
                 return False
         except Exception as e:
             self.__log_it(
-                f'downloading takeout data for eid={self.consent.eid} failed with error={str(e)}'
+                f'downloading takeout data for internal_id={self.consent.internal_id} failed with error={str(e)}'
             )
             return False
 
@@ -279,7 +278,7 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'search_raw_{str(self.consent.eid)}.csv'
+                    f'search_raw_{str(self.consent.internal_id)}.csv'
                 )
                 search_queries.to_csv(filename, index=None)
 
@@ -287,17 +286,17 @@ class TakeOutExtractor(object):
                     'type': 'search_raw',
                     'path': filename
                 })
-                self.__log_it(f'searches for eid={self.consent.eid} downloaded successfully')
+                self.__log_it(f'searches for internal_id={self.consent.internal_id} downloaded successfully')
 
                 return self.clean_search()
             else:
                 self.consent.add_search_error(
-                    f'search file for {self.consent.eid} not found in takeout data'
+                    f'search file for {self.consent.internal_id} not found in takeout data'
                 )
                 return False
         except Exception as e:
             self.consent.add_search_error(
-                f'downloading searches for eid={self.consent.eid} failed with error={str(e)}'
+                f'downloading searches for internal_id={self.consent.internal_id} failed with error={str(e)}'
             )
             return False
 
@@ -321,7 +320,7 @@ class TakeOutExtractor(object):
 
             filename = os.path.join(
                 secrets.ARCHIVE_AGENT_TMP_DIR,
-                f'search_redacted_{str(self.consent.eid)}.csv'
+                f'search_redacted_{str(self.consent.internal_id)}.csv'
             )
             self.__tmp_files.append({
                 'type': 'search_redacted',
@@ -329,10 +328,10 @@ class TakeOutExtractor(object):
             })
             redacted.to_csv(filename, index=None)
 
-            self.__log_it(f'searches for eid={self.consent.eid} redacted through DLP successfully')
+            self.__log_it(f'searches for internal_id={self.consent.internal_id} redacted through DLP successfully')
             return True
         except Exception as e:
-            self.consent.add_search_error(f'DLP cleaning eid={self.consent.eid} failed with error={str(e)}')
+            self.consent.add_search_error(f'DLP cleaning internal_id={self.consent.internal_id} failed with error={str(e)}')
             return False
 
     def extract_gps(self):
@@ -345,7 +344,7 @@ class TakeOutExtractor(object):
             if len(gps_files) > 0:
                 def write_json(count, f):
                     filename = '%s_%s_%s_GPS.json' % (
-                        str(self.consent.pid), self.consent.eid, count + 1
+                        str(self.consent.study_id), self.consent.internal_id, count + 1
                     )
                     filename = os.path.join(secrets.ARCHIVE_AGENT_TMP_DIR, filename)
 
@@ -366,18 +365,18 @@ class TakeOutExtractor(object):
                     } for l in location_files
                 ]
                 self.__log_it(
-                    f'{len(location_files)} location part(s) for eid={self.consent.eid} downloaded successfully'
+                    f'{len(location_files)} location part(s) for internal_id={self.consent.internal_id} downloaded successfully'
                 )
 
                 return self.clean_gps()
             else:
                 self.consent.add_location_error(
-                    f'location files for eid={self.consent.eid} not found in takeout data'
+                    f'location files for internal_id={self.consent.internal_id} not found in takeout data'
                 )
                 return False
         except Exception as e:
             self.consent.add_location_error(
-                f'downloading location parts for eid={self.consent.eid} failed with error={str(e)}'
+                f'downloading location parts for internal_id={self.consent.internal_id} failed with error={str(e)}'
             )
             return False
 
@@ -393,7 +392,7 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'GPS_{self.consent.pid}_{self.consent.eid}.csv'
+                    f'GPS_{self.consent.study_id}_{self.consent.internal_id}.csv'
                 )
                 df.to_csv(filename, index=None)
 
@@ -401,14 +400,14 @@ class TakeOutExtractor(object):
                     'type': 'gps_processed',
                     'path': filename
                 })
-                self.__log_it(f'parsing location data for eid={self.consent.eid} completed successfully')
+                self.__log_it(f'parsing location data for internal_id={self.consent.internal_id} completed successfully')
 
                 return True
             else:
                 return False
         except Exception as e:
             self.consent.add_location_error(
-                f'parsing location data for eid={str(self.consent.eid)} failed with error={str(e)}'
+                f'parsing location data for internal_id={str(self.consent.internal_id)} failed with error={str(e)}'
             )
             return False
 
@@ -446,10 +445,10 @@ class TakeOutExtractor(object):
                     )
 
                     cnt += 1
-                    self.__log_it(f'uploaded {t} data as {synid} for eid={self.consent.eid}')
+                    self.__log_it(f'uploaded {t} data as {synid} for internal_id={self.consent.internal_id}')
                 except Exception as e:
                     self.__log_it(
-                        f'uploading {t} data for eid={self.consent.eid} failed with error={str(e)}'
+                        f'uploading {t} data for internal_id={self.consent.internal_id} failed with error={str(e)}'
                     )
         return cnt
 
@@ -466,16 +465,16 @@ class TakeOutExtractor(object):
                     self.consent.update_synapse()
                     self.consent.notify_participant()
 
-                    self.__log_it(f'task for eid={self.consent.eid} completed. {cnt} files uploaded to Synapse')
+                    self.__log_it(f'task for internal_id={self.consent.internal_id} completed. {cnt} files uploaded to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
                 except Exception as e:
                     self.consent.set_status(ctx.ConsentStatus.FAILED)
-                    ctx.add_log_entry(str(e), self.consent.eid)
+                    ctx.add_log_entry(str(e), self.consent.internal_id)
             else:
                 pass
         else:
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
-            self.__log_it(f'Google Drive for eid={self.consent.eid} not ready')
+            self.__log_it(f'Google Drive for internal_id={self.consent.internal_id} not ready')
 
 
 def get_wait_time_from_env():
@@ -549,33 +548,34 @@ def does_exist(synid, name):
 
 
 def send_daily_digest(conn=None):
-    digest = ctx.daily_digest(conn)
+    try:
+        digest = ctx.daily_digest(conn)
+        template = Template(secrets.DIGEST_TEMPLATE)
 
-    template = Template(secrets.DIGEST_TEMPLATE)
-    content = Content(
-        "text/html",
-        template.render(x=digest)
-    )
-
-    from_ = Email(secrets.FROM_STUDY_EMAIL)
-    to_ = [Email(e) for e in secrets.ADMIN_EMAILS]
-
-    mail = Mail(
-        from_email=from_,
-        subject=secrets.DIGEST_SUBJECT.format(today=digest['today']),
-        content=content
-    )
-
-    p = Personalization()
-    for to in to_:
-        p.add_to(to)
-
-    mail.add_personalization(p)
-
-    sg = SendGridAPIClient(apikey=secrets.SENDGRID_API_KEY)
-    response = sg.client.mail.send.post(request_body=mail.get())
-
-    return response.status_code
+        client = boto3.client('ses', region_name=secrets.REGION_NAME)
+        response = client.send_email(
+            Source=secrets.FROM_STUDY_EMAIL,
+            Destination={
+                'ToAddresses': secrets.ADMIN_EMAILS
+            },
+            Message={
+                'Subject': {
+                    'Data': secrets.DIGEST_SUBJECT.format(today=digest['today']),
+                    'Charset': secrets.CHARSET
+                },
+                'Body': {
+                    'Html': {
+                        'Data': template.render(x=digest),
+                        'Charset': secrets.CHARSET
+                    }
+                }
+            },
+            ReplyToAddresses=[secrets.FROM_STUDY_EMAIL]
+        )
+    except ClientError as e:
+        raise Exception(f'email failed with error: {str(e.response["Error"]["Message"])}')
+    else:
+        return response
 
 
 def make_dlp_request(df):
@@ -613,7 +613,7 @@ def make_dlp_request(df):
 
         return idx, x, ', '.join(info_types), ', '.join(likelihoods), ', '.join(redactions)
 
-    parent = __dlp.project_path(secrets.DLP_PROJECT)
+    parent = __dlp.project_path(secrets.DLP_PROJECT_ID)
 
     # run each query through DLP
     pool = TPool(secrets.CLEANING_THREADS)
@@ -681,12 +681,13 @@ def main():
     )
 
     agent.start()
-    return f'agent started on pid {agent.get_pid()}'
+    return f'agent started on study_id {agent.get_study_id()}'
 
 
 if __name__ == '__main__':
     # build_synapse_log()
     main()
+    # send_daily_digest()
     #
     # searches = pd.DataFrame(
     #     ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],

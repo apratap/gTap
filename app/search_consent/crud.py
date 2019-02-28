@@ -13,8 +13,8 @@ crud = Blueprint('crud', __name__)
 @oauth2.required
 def download():
     if request.method == 'GET':
-        participant_id = request.args.get('pid')
-        return render_template('download.html', consent={'participant_id': participant_id})
+        study_id = request.args.get('study_id')
+        return render_template('download.html', consent={'study_id': study_id})
 
     if request.method == 'POST':
         data = request.form.to_dict(flat=True)
