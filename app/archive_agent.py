@@ -320,7 +320,7 @@ class TakeOutExtractor(object):
 
             filename = os.path.join(
                 secrets.ARCHIVE_AGENT_TMP_DIR,
-                f'search_redacted_{str(self.consent.internal_id)}.csv'
+                f'study_id-{self.consent.study_id}_internal_id-{self.consent.internal_id}_redacted_search_history.csv'
             )
             self.__tmp_files.append({
                 'type': 'search_redacted',
@@ -392,7 +392,7 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'GPS_{self.consent.study_id}_{self.consent.internal_id}.csv'
+                    f'study_id-{self.consent.study_id}_internal_id-{self.consent.internal_id}_location_history.csv'
                 )
                 df.to_csv(filename, index=None)
 
@@ -442,6 +442,13 @@ class TakeOutExtractor(object):
                             name='gTap Archive Manager',
                             description='This file was created by gTap',
                         )
+                    )
+                    syn.setAnnotations(
+                        synid,
+                        annotations={
+                            'study_id': self.consent.study_id,
+                            'internal_id': self.consent.internal_id
+                        }
                     )
 
                     cnt += 1
