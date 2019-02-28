@@ -42,7 +42,8 @@ def create_app(config, ssl=True, debug=False, testing=False, config_overrides=No
             'https://www.googleapis.com/auth/userinfo.email',
             'https://www.googleapis.com/auth/userinfo.profile'
         ],
-        authorize_callback=request_user_info, **additional_kwargs
+        authorize_callback=request_user_info, **additional_kwargs,
+        prompt='consent'
     )
 
     # Add a logout handler.

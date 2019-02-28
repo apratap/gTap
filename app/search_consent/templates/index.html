@@ -27,9 +27,9 @@
 <div class="container">
     <p class="lead"></p>
 
-    <div><p id="pid_err">participant ids can only contain numbers and letters</p></div>
+    <div><p id="study_id_err">participant ids can only contain numbers and letters</p></div>
     <div class="form-group">
-        <input type="text" name="pid" id="pid" class="form-control" placeholder="Participant Id"/>
+        <input type="text" name="study_id" id="study_id" class="form-control" placeholder="Study Id"/>
     </div>
 
     <p>
@@ -39,14 +39,14 @@
 
 <script type="text/javascript">
     function myRedirect() {
-        let pid = document.getElementById('pid');
+        let study_id = document.getElementById('study_id');
 
-        if (!isAlphaNumeric(pid.value)) {
-            pid.classList.add('error');
-            document.getElementById('pid_err').style.visibility = 'visible';
+        if (!isAlphaNumeric(study_id.value)) {
+            study_id.classList.add('error');
+            document.getElementById('study_id_err').style.visibility = 'visible';
         }
         else {
-            window.location.href = "{{ url_for('crud.download') }}" + "?pid=" + pid.value;
+            window.location.href = "{{ url_for('crud.download') }}" + "?study_id=" + study_id.value;
         }
     }
 
@@ -68,13 +68,13 @@
 </script>
 
 <style>
-    #pid {
+    #study_id {
         width: 215px;
         display: inline;
         text-align: center;
     }
 
-    #pid_err {
+    #study_id_err {
         color: red;
         visibility: hidden;
     }
