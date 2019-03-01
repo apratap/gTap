@@ -15,54 +15,58 @@
         </div>
     </form>
 
-    <h3>Takeout Directions</h3>
+    <h3><strong>Takeout Directions</strong></h3>
     <p>
-        Please read these directions carefully before proceeding to the next page. Clicking the 'Takeout' button
+        Please read these directions carefully before proceeding to the next page. Clicking the 'Proceed to Takeout' button
         below will redirect this page to the Google Takeout tool. On this page we need you to perform the operations
-        listed below. We recommend either taking a screenshot of the directions or holding your 'cntrl' key when
-        clicking the button to open the link in a new tab.
+        listed below. The page will open in a tab for you to continue referencing this set of directions.
+    </p>
+    <p>
+        Some of your search history contains location tags. We discard this data and only use the Location history
+        as a selected product in the directions below.
     </p>
 
     <ol id="directions-list">
         <li>
-            Click the button <em>SELECT NONE</em>
-            <img id="directions-1" class="directions" src="{{ url_for('static', filename='directions_1.PNG') }}" alt="d1">
+            Next to <em>Products</em> click <img class="inline-button" style="height: 20px; position: relative; top: -2px;" src="{{ url_for('static', filename='deselect_all.PNG') }}" alt="deselect_all">
         </li>
         <li>
-            Scroll to down and flip the switch for <em>Location History</em> to enable it
+            Scroll to down and check the box for <em>Location History</em> to enable it
             <img id="directions-2" class="directions" src="{{ url_for('static', filename='directions_2.PNG') }}" alt="d2">
         </li>
         <li>
-            Scroll and flip the switch for <em>My Activity</em> to enable it
+            Scroll and check the box for <em>My Activity</em> to enable it
             <img id="directions-3" class="directions" src="{{ url_for('static', filename='directions_3.PNG') }}" alt="d3">
         </li>
-        <li>Click the drop down carat to the left of the switch to see options for My Activity</li>
         <li>
-            Click <em>Select specific activity data</em>. A window will open showing you the types of data to contribute
+            Click <img id="multiple_formats" class="inline-button" style="height: 35px !important;" src="{{ url_for('static', filename='mutiple_formats.PNG') }}" alt="multiple formats"> to change the activity options
+        </li>
+        <li>
+            Change the file format for <em>Activity records</em> from HTML to JSON
             <img id="directions-4" class="directions" src="{{ url_for('static', filename='directions_4.PNG') }}" alt="d4">
         </li>
         <li>
-            Click the box next to 'Toggle all' to deselect all options
+            Click <img class="inline-button" style="height: 20px !important;" src="{{ url_for('static', filename='OK.PNG') }}" alt="OK"> to close the My Activity options dialog
         </li>
         <li>
-            Scroll down and check the box next to <em>search</em>
+            Click <img class="inline-button" style="height: 40px !important;" src="{{ url_for('static', filename='directions_5.PNG') }}" alt="d5"> to open a dialog for product selection
+
         </li>
         <li>
-            Click <em>OK</em>
+            Click <img class="inline-button" style="height: 20px; position: relative; top: -2px;" src="{{ url_for('static', filename='deselect_all.PNG') }}" alt="deselect_all"> to uncheck all products
         </li>
         <li>
-            Underneath the grey 'ACTIVITY DATA' button you'll see HTML and a drop down caret. Click the caret and select JSON
-            <img id="directions-8" class="directions" src="{{ url_for('static', filename='directions_8.PNG') }}" alt="d8">
+            Scroll and check the box for <em>Search</em>
+            <img id="directions-7" style="width: 250px !important;" class="directions" src="{{ url_for('static', filename='directions_7.PNG') }}" alt="d7">
         </li>
-        <li>
-            Scroll to the bottom of the page and click the <img class="inline-button" src="{{ url_for('static', filename='directions_7.PNG') }}" alt="d7"> button
-        </li>
+        <li>Click <img id="directions-5" class="inline-button" style="height: 20px !important;" src="{{ url_for('static', filename='OK.PNG') }}" alt="OK"> to close the dialog</li>
+        <li>Scroll down and click <img class="inline-button" style="height: 35px !important;" src="{{ url_for('static', filename='next_step.PNG') }}" alt="next-step"></li>
         <li>
             Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em>
             <img id="directions-10" class="directions" src="{{ url_for('static', filename='directions_10.PNG') }}" alt="d10">
         </li>
         <li>
-            Click <img class="inline-button" src="{{ url_for('static', filename='create_archive.PNG') }}" alt="create-archive">
+            Click <img class="inline-button" style="height: 35px !important;" src="{{ url_for('static', filename='create_archive.PNG') }}" alt="create-archive">
         </li>
     </ol>
 
@@ -120,16 +124,21 @@
     </style>
 
     <script type="text/javascript">
-        function submit_form (){
-            $.ajax({
-                url: 'download',
-                type: 'POST',
-                data: $('#takeout-form').serialize(),
-                success: function() {
-                    let win = window.open('https://takeout.google.com', '_blank');
-                    win.focus();
-                }
-            });
+        let clicked = false;
+
+        function submit_form () {
+            if (clicked === false) {
+                $.ajax({
+                    url: 'download',
+                    type: 'POST',
+                    data: $('#takeout-form').serialize(),
+                    success: function () {
+                        let win = window.open('https://takeout.google.com', '_blank');
+                        win.focus();
+                    }
+                });
+                clicked = true;
+            }
         }
     </script>
 {% endblock %}
