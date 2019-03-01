@@ -147,7 +147,7 @@ class TakeOutExtractor(object):
 
                 # for future studies, the 'locations' column contains true labels for locations (home, work, etc)
                 search_queries = search_queries.drop(columns=[
-                    'header', 'details', 'products', 'titleUrl', 'locations'
+                    'header', 'details', 'products', 'locations'
                 ], errors='ignore')
 
                 actions, titles = [], []
