@@ -31,122 +31,6 @@ __dlp = dlp.DlpServiceClient()
 DRIVE_NOT_READY = 'drive not ready'
 
 
-class ArchiveAgent(object):
-    def __init__(self, conn, keep_alive=True, wait_time=None):
-        if wait_time is None:
-            self.wait_time = get_wait_time_from_env()
-        else:
-            self.wait_time = wait_time
-
-        if self.wait_time is None:
-            self.wait_time = 600.
-
-        self.conn = conn
-        self.keep_alive = keep_alive
-
-        self.__digest_date = dt.date.today()
-
-        self.__sigkill, self.__done = Pipe()
-        self.__agent = Process(
-            name=secrets.ARCHIVE_AGENT_PROC_NAME,
-            target=self.__run_agent,
-            args=(self.wait_time, self.conn, self.keep_alive, self.__sigkill, self.__done)
-        )
-
-        if not os.path.exists(secrets.ARCHIVE_AGENT_TMP_DIR):
-            os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
-
-    def get_pid(self):
-        return self.__agent.pid
-
-    def get_status(self):
-        return f'archive agent <study_id={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
-
-    def start_async(self):
-        if not self.__agent.is_alive():
-            self.__agent.start()
-        else:
-            pass
-
-    def start(self):
-        self.start_async()
-
-        time.sleep(5)
-        self.terminate()
-
-    def terminate(self):
-        if self.__agent.is_alive():
-            self.__sigkill.send(True)
-            ctx.add_log_entry('signalled agent to terminate')
-        else:
-            pass
-
-        self.__done.recv()
-        self.__agent.join()
-        ctx.add_log_entry('agent terminated gracefully')
-
-    def send_digest(self):
-        # check for digest send
-        now = dt.date.today()
-        if (now - self.__digest_date).days > 0:
-            send_daily_digest()
-            self.__digest_date = now
-        else:
-            pass
-
-    def __run_agent(self, wait_time, conn, keep_alive, sigkill, done):
-        terminate = False
-
-        while not terminate:
-            try:
-                start = time.time()
-
-                # process tasks
-                current_id = np.nan
-
-                with ctx.session_scope(conn) as s:
-                    pending = ctx.get_next_pending(session=s)
-
-                    if pending is not None:
-                        current_id = pending.internal_id
-                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.internal_id)
-
-                        try:
-                            task = TakeOutExtractor(pending)
-                            task.run()
-
-                            del task, pending
-                            gc.collect()
-                        except Exception as e:
-                            pending.set_status(ctx.ConsentStatus.FAILED)
-                            pending.update_synapse()
-                            raise e
-
-                # check for termination
-                terminate = sigkill.poll(1)
-                if not terminate:
-                    remaining = wait_time - (time.time() - start)
-                    time.sleep(remaining if remaining > 0 else 0)
-                else:
-                    pass
-
-                self.send_digest()
-            except Exception as e:
-                ctx.mark_as_permanently_failed(current_id)
-                ctx.add_log_entry(
-                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}',
-                    cid=current_id
-                )
-
-                if not keep_alive:
-                    ctx.add_log_entry('agent shutting down')
-                    break
-                else:
-                    ctx.add_log_entry('agent restarting')
-
-        done.send(True)
-
-
 class TakeOutExtractor(object):
     def __init__(self, consent):
         self.consent = consent
@@ -261,8 +145,9 @@ class TakeOutExtractor(object):
                 search_queries['time'] = search_queries.time.apply(tx)
                 search_queries = search_queries.sort_values(by='time')
 
+                # for future studies, the 'locations' column contains true labels for locations (home, work, etc)
                 search_queries = search_queries.drop(columns=[
-                    'details', 'products', 'titleUrl'
+                    'header', 'details', 'products', 'titleUrl', 'locations'
                 ], errors='ignore')
 
                 actions, titles = [], []
@@ -319,9 +204,48 @@ class TakeOutExtractor(object):
             else:
                 return False
 
-            df_ = df.loc[df.action == 'Searched']
+            # only process unique searches, build a reference set of uniques to the dup rows
+            def fx(x):
+                idx = x.index.tolist()[0]
 
-            redacted = make_dlp_request(df_)
+                if len(x) > 1:
+                    ref = ','.join([str(int(i)) for i in x.index.tolist()[1:]])
+                    return pd.Series([idx, ref])
+                else:
+                    return pd.Series([idx, np.nan])
+
+            idx_map = df.loc[df.action == 'Searched']\
+                .groupby('title')\
+                .apply(fx)\
+                .reset_index(drop=True)\
+                .rename(columns={0: 'src', 1: 'ref'})
+
+            idx_map.src = idx_map.src.astype(int)
+
+            redacted = make_dlp_request(df.loc[idx_map.src]).reset_index()
+
+            cols_to_update = []
+            for c in redacted.columns:
+                if c == 'index':
+                    continue
+
+                if c not in df.columns:
+                    df[c] = ''
+                    cols_to_update.append(c)
+                    df.loc[redacted.index, c] = redacted[c]
+
+            df.loc[redacted.index, 'title'] = redacted.title
+
+            idx_map = idx_map.loc[redacted.info_type.apply(lambda x: len(x) > 0), :]
+
+            def fx(x):
+                to_set = [int(i) for i in x.ref.split(',')]
+                df.loc[to_set, 'title'] = redacted.loc[x.src, 'title']
+
+                for c in cols_to_update:
+                    df.loc[to_set, c] = redacted.loc[x.src, c]
+
+            [fx(x) for x in idx_map.loc[idx_map.ref.notna()].itertuples()]
 
             filename = os.path.join(
                 secrets.ARCHIVE_AGENT_TMP_DIR,
@@ -331,7 +255,7 @@ class TakeOutExtractor(object):
                 'type': 'search_redacted',
                 'path': filename
             })
-            redacted.to_csv(filename, index=None)
+            df.to_csv(filename, index=None)
 
             self.__log_it(f'searches for internal_id={self.consent.internal_id} redacted through DLP successfully')
             return True
@@ -487,6 +411,122 @@ class TakeOutExtractor(object):
         else:
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
             self.__log_it(f'Google Drive for internal_id={self.consent.internal_id} not ready')
+
+
+class ArchiveAgent(object):
+    def __init__(self, conn, keep_alive=True, wait_time=None):
+        if wait_time is None:
+            self.wait_time = get_wait_time_from_env()
+        else:
+            self.wait_time = wait_time
+
+        if self.wait_time is None:
+            self.wait_time = 600.
+
+        self.conn = conn
+        self.keep_alive = keep_alive
+
+        self.__digest_date = dt.date.today()
+
+        self.__sigkill, self.__done = Pipe()
+        self.__agent = Process(
+            name=secrets.ARCHIVE_AGENT_PROC_NAME,
+            target=self.__run_agent,
+            args=(self.wait_time, self.conn, self.keep_alive, self.__sigkill, self.__done)
+        )
+
+        if not os.path.exists(secrets.ARCHIVE_AGENT_TMP_DIR):
+            os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
+
+    def get_pid(self):
+        return self.__agent.pid
+
+    def get_status(self):
+        return f'archive agent <study_id={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
+
+    def start_async(self):
+        if not self.__agent.is_alive():
+            self.__agent.start()
+        else:
+            pass
+
+    def start(self):
+        self.start_async()
+
+        time.sleep(5)
+        self.terminate()
+
+    def terminate(self):
+        if self.__agent.is_alive():
+            self.__sigkill.send(True)
+            ctx.add_log_entry('signalled agent to terminate')
+        else:
+            pass
+
+        self.__done.recv()
+        self.__agent.join()
+        ctx.add_log_entry('agent terminated gracefully')
+
+    def send_digest(self):
+        # check for digest send
+        now = dt.date.today()
+        if (now - self.__digest_date).days > 0:
+            send_daily_digest()
+            self.__digest_date = now
+        else:
+            pass
+
+    def __run_agent(self, wait_time, conn, keep_alive, sigkill, done):
+        terminate = False
+
+        while not terminate:
+            try:
+                start = time.time()
+
+                # process tasks
+                current_id = np.nan
+
+                with ctx.session_scope(conn) as s:
+                    pending = ctx.get_next_pending(session=s)
+
+                    if pending is not None:
+                        current_id = pending.internal_id
+                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.internal_id)
+
+                        try:
+                            task = TakeOutExtractor(pending)
+                            task.run()
+
+                            del task, pending
+                            gc.collect()
+                        except Exception as e:
+                            pending.set_status(ctx.ConsentStatus.FAILED)
+                            pending.update_synapse()
+                            raise e
+
+                # check for termination
+                terminate = sigkill.poll(1)
+                if not terminate:
+                    remaining = wait_time - (time.time() - start)
+                    time.sleep(remaining if remaining > 0 else 0)
+                else:
+                    pass
+
+                self.send_digest()
+            except Exception as e:
+                ctx.mark_as_permanently_failed(current_id)
+                ctx.add_log_entry(
+                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}',
+                    cid=current_id
+                )
+
+                if not keep_alive:
+                    ctx.add_log_entry('agent shutting down')
+                    break
+                else:
+                    ctx.add_log_entry('agent restarting')
+
+        done.send(True)
 
 
 def get_wait_time_from_env():
