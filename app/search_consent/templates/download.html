@@ -30,11 +30,7 @@
         <li>
             Next to <em>Products</em> click <img class="inline-button" style="height: 20px; position: relative; top: -2px;" src="{{ url_for('static', filename='deselect_all.PNG') }}" alt="deselect_all">
         </li>
-        <li>
-            Scroll to down and check the box for <em>Location History</em> to enable it
-            <img id="directions-2" class="directions" src="{{ url_for('static', filename='directions_2.PNG') }}" alt="d2">
-        </li>
-        <li>
+                <li>
             Scroll and check the box for <em>My Activity</em> to enable it
             <img id="directions-3" class="directions" src="{{ url_for('static', filename='directions_3.PNG') }}" alt="d3">
         </li>
@@ -60,6 +56,11 @@
             <img id="directions-7" style="width: 250px !important;" class="directions" src="{{ url_for('static', filename='directions_7.PNG') }}" alt="d7">
         </li>
         <li>Click <img id="directions-5" class="inline-button" style="height: 20px !important;" src="{{ url_for('static', filename='OK.PNG') }}" alt="OK"> to close the dialog</li>
+        <li>
+            <span class="optional">This bullet is optional.</span>
+            Scroll to, and check the box for <em>Location History</em> to enable it
+            <img id="directions-2" class="directions" src="{{ url_for('static', filename='directions_2.PNG') }}" alt="d2">
+        </li>
         <li>Scroll down and click <img class="inline-button" style="height: 35px !important;" src="{{ url_for('static', filename='next_step.PNG') }}" alt="next-step"></li>
         <li>
             Under <stong>Delivery method</stong> change <em>Send download link via email</em> to <em>Add to drive</em>
@@ -74,6 +75,12 @@
     <div style="height: 50px"></div>
 
     <style>
+        .optional {
+            font-style: italic;
+            color: red;
+            display: block;
+        }
+
         .form-element {
             background: transparent !important;
             border: none !important;
