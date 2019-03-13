@@ -554,23 +554,26 @@ def get_next_pending(conn=None, session=None):
     ).order_by(Consent.consent_dt.desc()).with_for_update().first()
 
     ready = False
-    if pending is not None and not \
+    if pending is not None:
+        if not \
             (pending.status == ConsentStatus.DRIVE_NOT_READY.value and
              pending.seconds_since_last_drive_attempt() > secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY):
 
-        if pending.seconds_since_last_drive_attempt() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
-            pending.set_status(ConsentStatus.FAILED)
-            pending.clear_credentials()
+            if pending.seconds_since_last_drive_attempt() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
+                pending.set_status(ConsentStatus.FAILED)
+                pending.clear_credentials()
 
-            add_log_entry(
-                f'Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
-                pending.internal_id
-            )
+                add_log_entry(
+                    f'Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
+                    pending.internal_id
+                )
 
-            pending.update_synapse()
+                pending.update_synapse()
+            else:
+                pending.set_status(ConsentStatus.PROCESSING)
+                ready = True
         else:
-            pending.set_status(ConsentStatus.PROCESSING)
-            ready = True
+            pending.update_synapse()
     else:
         pass
 

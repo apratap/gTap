@@ -444,7 +444,7 @@ class ArchiveAgent(object):
         return self.__agent.pid
 
     def get_status(self):
-        return f'archive agent <study_id={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
+        return f'archive agent <pid={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
 
     def start_async(self):
         if not self.__agent.is_alive():
