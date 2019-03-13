@@ -406,10 +406,12 @@ class TakeOutExtractor(object):
                 except Exception as e:
                     self.consent.set_status(ctx.ConsentStatus.FAILED)
                     ctx.add_log_entry(str(e), self.consent.internal_id)
+                    self.consent.update_synapse()
             else:
                 pass
         else:
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
+            self.consent.update_synapse()
             self.__log_it(f'Google Drive for internal_id={self.consent.internal_id} not ready')
 
 
@@ -519,6 +521,7 @@ class ArchiveAgent(object):
                     f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}',
                     cid=current_id
                 )
+
 
                 if not keep_alive:
                     ctx.add_log_entry('agent shutting down')
