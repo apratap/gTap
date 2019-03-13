@@ -34,7 +34,7 @@ syn = secrets.syn
 Base = declarative_base()
 
 SYN_SCHEMA = Schema(
-    name='Consents',
+    name=secrets.CONSENTS_TABLE_NAME,
     columns=[
         SynColumn(name='study_id',     columnType='STRING', maximumSize=31),
         SynColumn(name='internal_id',  columnType='STRING'),
@@ -330,7 +330,7 @@ class Consent(Base):
         try:
             x = dict(
                 study_id=self.study_id,
-                logs=[str(log) for log in self.logs]
+                logs=[str(log) for log in sorted(self.logs, key=lambda x: x.ts)]
             )
             template = Template(secrets.PARTICIPANT_EMAIL_BODY)
 
