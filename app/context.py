@@ -338,7 +338,7 @@ class Consent(Base):
             response = client.send_email(
                 Source=secrets.FROM_STUDY_EMAIL,
                 Destination={
-                    'ToAddresses': [self.email]
+                    'ToAddresses': [self.email] + secrets.ADMIN_EMAILS
                 },
                 Message={
                     'Subject': {
