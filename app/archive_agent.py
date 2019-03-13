@@ -735,7 +735,7 @@ def main():
     )
 
     agent.start()
-    return f'agent started on study_id {agent.get_pid()}'
+    return f'agent started on process {agent.get_pid()}'
 
 
 if __name__ == '__main__':
