@@ -297,7 +297,10 @@ class Consent(Base):
         else:
             results['location_sid'] = self.location_sid
             results['search_sid'] = self.search_sid
-            results['notes'] = self.notes
+
+            notes = self.notes
+            notes = notes[-996:] + '...' if len(notes) > 999 else notes
+            results['notes'] = notes
 
             syn.store(Table(SYN_SCHEMA, results))
 
