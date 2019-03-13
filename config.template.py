@@ -67,6 +67,9 @@ ARCHIVE_AGENT_TMP_DIR = ''
 """how long to wait between Google Drive queries if the last attempt was not ready. (seconds)"""
 WAIT_TIME_BETWEEN_DRIVE_NOT_READY = 0
 
+"""maximum time for DRIVE attempts. (seconds)"""
+MAX_TIME_FOR_DRIVE_WAIT = 0
+
 """working directory on the beanstalk-ec2 instance"""
 WORKING_DIR = ''
 
