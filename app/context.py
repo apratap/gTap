@@ -342,7 +342,7 @@ class Consent(Base):
                 },
                 Message={
                     'Subject': {
-                        'Data': secrets.PARTICIPANT_EMAIL_SUBJECT.format(internal_id=self.internal_id),
+                        'Data': secrets.PARTICIPANT_EMAIL_SUBJECT,
                         'Charset': secrets.CHARSET
                     },
                     'Body': {
