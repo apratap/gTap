@@ -28,9 +28,9 @@ import app.config as secrets
 
 syn = secrets.syn
 
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 # Model
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 Base = declarative_base()
 
 SYN_SCHEMA = Schema(
@@ -184,6 +184,13 @@ class Consent(Base):
             str(entry) for entry in logs[1:]
         ])
 
+    @property
+    def latest_archive_transaction(self):
+        log = sorted(self.logs, key=lambda x: x.ts)
+        if len(log) > 0:
+            log = log[-1]
+        return str(log)
+
     @hybrid_property
     def date(self):
         return self.consent_dt.date()
@@ -297,10 +304,7 @@ class Consent(Base):
         else:
             results['location_sid'] = self.location_sid
             results['search_sid'] = self.search_sid
-
-            notes = self.notes
-            notes = notes[-996:] + '...' if len(notes) > 999 else notes
-            results['notes'] = notes
+            results['notes'] = self.latest_archive_transaction
 
             syn.store(Table(SYN_SCHEMA, results))
 
@@ -395,9 +399,9 @@ class LogEntry(Base):
         return f'{self.ts_formatted}: {self.msg}'
 
 
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 # Database Context
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 def get_engine(conn):
     driver = conn['drivername']
 
@@ -457,9 +461,9 @@ def build_synapse_table():
     )
 
 
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 # Interactions
-# ------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 def add_task(data, conn=None, session=None):
     consent = Consent(**data)
     consent.set_status(ConsentStatus.READY)
