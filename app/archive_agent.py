@@ -412,7 +412,7 @@ class TakeOutExtractor(object):
         else:
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
             self.consent.update_synapse()
-            self.__log_it(f'Google Drive for internal_id={self.consent.internal_id} not ready')
+            self.__log_it(f'Google Drive for {self.consent.study_id} not ready')
 
 
 class ArchiveAgent(object):
