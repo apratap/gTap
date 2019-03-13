@@ -173,7 +173,7 @@ class Consent(Base):
             'consent_dt': self.consent_dt,
             'location_sid': self.location_sid,
             'search_sid': self.search_sid,
-            'notes': [l.dict for l in self.logs],
+            'notes': [l.dict for l in sorted(self.logs, key=lambda x: x.ts)],
             'status': self.status
         }
 
@@ -338,7 +338,7 @@ class Consent(Base):
             response = client.send_email(
                 Source=secrets.FROM_STUDY_EMAIL,
                 Destination={
-                    'ToAddresses': [secrets.TO_EMAIL]  # TODO: self.email
+                    'ToAddresses': [self.email]
                 },
                 Message={
                     'Subject': {
