@@ -554,8 +554,20 @@ def get_next_pending(conn=None, session=None):
     if pending is not None and not \
             (pending.status == ConsentStatus.DRIVE_NOT_READY.value and
              pending.seconds_since_last_drive_attempt() > secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY):
-        pending.set_status(ConsentStatus.PROCESSING)
-        ready = True
+
+        if pending.seconds_since_last_drive_attempt() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
+            pending.set_status(ConsentStatus.FAILED)
+            pending.clear_credentials()
+
+            add_log_entry(
+                f'Google Drive not ready for {str(pending)} after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
+                pending.internal_id
+            )
+
+            pending.update_synapse()
+        else:
+            pending.set_status(ConsentStatus.PROCESSING)
+            ready = True
     else:
         pass
 

@@ -522,7 +522,6 @@ class ArchiveAgent(object):
                     cid=current_id
                 )
 
-
                 if not keep_alive:
                     ctx.add_log_entry('agent shutting down')
                     break
