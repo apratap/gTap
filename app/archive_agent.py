@@ -493,7 +493,7 @@ class ArchiveAgent(object):
 
                     if pending is not None:
                         current_id = pending.internal_id
-                        ctx.add_log_entry(f'starting task for {str(pending)}', cid=pending.internal_id)
+                        ctx.add_log_entry(f'starting task for {pending.study_id}', cid=pending.internal_id)
 
                         try:
                             task = TakeOutExtractor(pending)

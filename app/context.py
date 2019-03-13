@@ -215,7 +215,7 @@ class Consent(Base):
         session = inspect(self).session
         commit(session)
 
-        add_log_entry(f'credentials for internal_id={self.internal_id} have been cleared', self.internal_id)
+        add_log_entry(f'credentials for study_id={self.study_id} have been cleared', self.internal_id)
 
     def add_search_error(self, msg=None, session=None):
         if 'not found' in msg:
@@ -279,7 +279,7 @@ class Consent(Base):
             except SynapseHTTPError:
                 pass
             except Exception as e:
-                add_log_entry(f'consent for internal_id={self.internal_id} failed to push to Synapse with error={str(e)}')
+                add_log_entry(f'consent for study_id={self.study_id} failed to push to Synapse with error={str(e)}')
                 retries = 0
 
             retries -= 1
@@ -563,7 +563,7 @@ def get_next_pending(conn=None, session=None):
             pending.clear_credentials()
 
             add_log_entry(
-                f'Google Drive not ready for {str(pending)} after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
+                f'Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
                 pending.internal_id
             )
 
