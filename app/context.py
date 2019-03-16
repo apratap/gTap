@@ -4,6 +4,7 @@ from enum import Enum
 import json
 from pytz import timezone as tz
 from ssl import SSLError
+import sys
 import time
 
 from botocore.exceptions import ClientError
@@ -153,7 +154,16 @@ class Consent(Base):
         )
 
     def __str__(self):
-        return f'participant: {self.study_id}, internal_id: {self.internal_id}'
+        return f'{self.internal_id}, {self.consent_dt.strftime(secrets.DTFORMAT)}'
+
+    def __eq__(self, other):
+        return self.internal_id == other.internal_id and self.study_id == other.study_id
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __gt__(self, other):
+        return self.latest_access >= other.latest_access
 
     @property
     def credentials(self):
@@ -184,13 +194,6 @@ class Consent(Base):
             str(entry) for entry in logs[1:]
         ])
 
-    @property
-    def latest_archive_transaction(self):
-        log = sorted(self.logs, key=lambda x: x.ts)
-        if len(log) > 0:
-            log = log[-1]
-        return str(log)
-
     @hybrid_property
     def date(self):
         return self.consent_dt.date()
@@ -199,13 +202,19 @@ class Consent(Base):
     def hours_since_consent(self):
         return np.ceil((dt.datetime.now()-self.consent_dt).seconds/3600)
 
-    def seconds_since_last_drive_attempt(self):
-        logs = sorted(self.logs, key=lambda x: x.ts, reverse=True)
-        logs = [l for l in logs if 'Google Drive' in l.msg and 'not ready' in l.msg]
-        if len(logs) > 0:
-            return (dt.datetime.now(tz('utc')) - tz('utc').localize(logs[0].ts)).total_seconds()
-        else:
-            return -1
+    @property
+    def latest_access(self):
+        latest = self.latest_archive_transaction
+        if latest is None:
+            return self.consent_dt
+        return latest.ts
+
+    @property
+    def latest_archive_transaction(self):
+        log = sorted(self.logs, key=lambda x: x.ts)
+        if len(log) > 0:
+            return log[-1]
+        return None
 
     @staticmethod
     def __encrypt(data):
@@ -215,14 +224,6 @@ class Consent(Base):
         msg = cypher.encrypt(s)
 
         return msg
-
-    def clear_credentials(self):
-        self.data = None
-
-        session = inspect(self).session
-        commit(session)
-
-        add_log_entry(f'credentials for study_id={self.study_id} have been cleared', self.internal_id)
 
     def add_search_error(self, msg=None, session=None):
         if 'not found' in msg:
@@ -264,74 +265,24 @@ class Consent(Base):
             self.set_status(ConsentStatus.FAILED)
         return self
 
-    def put_to_synapse(self):
-        rmeow = dt.datetime.now(tz("US/Pacific")).strftime(secrets.DTFORMAT).upper()
-
-        data = [[
-            self.study_id,
-            self.internal_id,
-            rmeow,
-            self.location_sid,
-            self.search_sid,
-            self.notes
-        ]]
-
-        retries = 10
-        while retries > 0:
-            try:
-                syn.store(Table(SYN_SCHEMA, data))
-                retries = 0
-            except SSLError:
-                pass
-            except SynapseHTTPError:
-                pass
-            except Exception as e:
-                add_log_entry(f'consent for study_id={self.study_id} failed to push to Synapse with error={str(e)}')
-                retries = 0
-
-            retries -= 1
-            time.sleep(3)
-
-    def update_synapse(self):
-        results = syn.tableQuery(
-            f"select * from {secrets.CONSENTS_SYNID} "
-            f"where study_id='{self.study_id}'"
-            f"  and internal_id='{self.internal_id}'"
-        ).asDataFrame()
-
-        if len(results) == 0:
-            self.put_to_synapse()
-        else:
-            results['location_sid'] = self.location_sid
-            results['search_sid'] = self.search_sid
-            results['notes'] = self.latest_archive_transaction
-
-            syn.store(Table(SYN_SCHEMA, results))
-
-    def set_search_sid(self, sid):
-        if self.search_sid is None:
-            self.search_sid = str(StringArray(sid))
-        else:
-            self.search_sid = str(StringArray(self.search_sid).merge(sid))
+    def clear_credentials(self):
+        self.data = None
 
         session = inspect(self).session
         commit(session)
 
+        add_log_entry(f'credentials for study_id={self.study_id} have been cleared', self.internal_id)
+
+    def mark_as_drive_failure(self):
+        self.set_status(ConsentStatus.FAILED)
+        self.clear_credentials()
+
+        add_log_entry(
+            f'Marked as failed. Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT / 3600)} hours.',
+            self.internal_id
+        )
+
         self.update_synapse()
-
-    def set_location_sid(self, sid):
-        if self.location_sid is None:
-            self.location_sid = str(StringArray(sid))
-        else:
-            self.location_sid = str(StringArray(self.search_sid).merge(sid))
-
-        session = inspect(self).session
-        commit(session)
-
-        self.update_synapse()
-
-    def set_status(self, status):
-        self.status = status.value
 
     def notify_participant(self):
         try:
@@ -365,6 +316,86 @@ class Consent(Base):
             raise Exception(f'email failed with error: {str(e.response["Error"]["Message"])}')
         else:
             return response
+
+    def put_to_synapse(self):
+        rmeow = dt.datetime.now(tz("US/Pacific")).strftime(secrets.DTFORMAT).upper()
+
+        data = [[
+            self.study_id,
+            self.internal_id,
+            rmeow,
+            self.location_sid,
+            self.search_sid,
+            self.notes
+        ]]
+
+        retries = 10
+        while retries > 0:
+            try:
+                syn.store(Table(SYN_SCHEMA, data))
+                retries = 0
+            except SSLError:
+                pass
+            except SynapseHTTPError:
+                pass
+            except Exception as e:
+                add_log_entry(f'consent for study_id={self.study_id} failed to push to Synapse with error={str(e)}')
+                retries = 0
+
+            retries -= 1
+            time.sleep(3)
+
+    def seconds_since_last_drive_attempt(self):
+        logs = sorted(self.logs, key=lambda x: x.ts)
+        logs = [l for l in logs if 'Google Drive' in l.msg and 'not ready' in l.msg]
+        if len(logs) > 0:
+            return (dt.datetime.now(tz('utc')) - tz('utc').localize(logs[-1].ts)).total_seconds()
+        else:
+            return sys.maxsize
+
+    def seconds_since_consent(self):
+        return (dt.datetime.now(tz('utc')) - tz('utc').localize(self.consent_dt)).total_seconds()
+
+    def set_location_sid(self, sid):
+        if self.location_sid is None:
+            self.location_sid = str(StringArray(sid))
+        else:
+            self.location_sid = str(StringArray(self.search_sid).merge(sid))
+
+        session = inspect(self).session
+        commit(session)
+
+        self.update_synapse()
+
+    def set_search_sid(self, sid):
+        if self.search_sid is None:
+            self.search_sid = str(StringArray(sid))
+        else:
+            self.search_sid = str(StringArray(self.search_sid).merge(sid))
+
+        session = inspect(self).session
+        commit(session)
+
+        self.update_synapse()
+
+    def set_status(self, status):
+        self.status = status.value
+
+    def update_synapse(self):
+        results = syn.tableQuery(
+            f"select * from {secrets.CONSENTS_SYNID} "
+            f"where study_id='{self.study_id}'"
+            f"  and internal_id='{self.internal_id}'"
+        ).asDataFrame()
+
+        if len(results) == 0:
+            self.put_to_synapse()
+        else:
+            results['location_sid'] = self.location_sid
+            results['search_sid'] = self.search_sid
+            results['notes'] = str(self.latest_archive_transaction)
+
+            syn.store(Table(SYN_SCHEMA, results))
 
 
 class LogEntry(Base):
@@ -544,51 +575,44 @@ def mark_as_permanently_failed(internal_id, session=None):
         get_n_commit(session)
 
 
-def get_next_pending(conn=None, session=None):
+def get_pending(conn=None, session=None):
     if session is None:
         session = session_scope(conn)
         close = True
     else:
         close = False
 
-    pending = session.query(Consent).filter(or_(
-            Consent.status == ConsentStatus.READY.value,
-            Consent.status == ConsentStatus.DRIVE_NOT_READY.value
-        )
-    ).order_by(Consent.consent_dt.desc()).with_for_update().first()
+    pending = sorted(session.query(Consent).filter(or_(
+        Consent.status == ConsentStatus.READY.value,
+        Consent.status == ConsentStatus.DRIVE_NOT_READY.value
+    )).with_for_update().all(), reverse=True)
 
-    ready = False
-    if pending is not None:
-        if not \
-            (pending.status == ConsentStatus.DRIVE_NOT_READY.value and
-             pending.seconds_since_last_drive_attempt() > secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY):
+    ready = []
 
-            if pending.seconds_since_last_drive_attempt() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
-                pending.set_status(ConsentStatus.FAILED)
-                pending.clear_credentials()
+    def add_to_ready(p):
+        p.set_status(ConsentStatus.PROCESSING)
+        ready.append(p)
 
-                add_log_entry(
-                    f'Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT/3600)} hours',
-                    pending.internal_id
-                )
+    while len(pending) > 0:
+        p = pending.pop()
 
-                pending.update_synapse()
+        if p.status == ConsentStatus.DRIVE_NOT_READY.value:
+            if p.seconds_since_consent() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
+                p.mark_as_drive_failure()
+
+            elif p.seconds_since_last_drive_attempt() < secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY:
+                pass
+
             else:
-                pending.set_status(ConsentStatus.PROCESSING)
-                ready = True
+                add_to_ready(p)
         else:
-            pending.update_synapse()
-    else:
-        pass
+            add_to_ready(p)
 
     commit(session)
-
     if close:
         session.close()
-    else:
-        pass
 
-    return pending if ready else None
+    return ready
 
 
 def get_consent(study_id, internal_id, session):

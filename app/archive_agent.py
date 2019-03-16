@@ -398,11 +398,11 @@ class TakeOutExtractor(object):
                     cnt = self.push_to_synapse()
 
                     self.consent.clear_credentials()
-                    self.consent.update_synapse()
                     self.consent.notify_participant()
 
                     self.__log_it(f'task for internal_id={self.consent.internal_id} completed. {cnt} files uploaded to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
+                    self.consent.update_synapse()
                 except Exception as e:
                     self.consent.set_status(ctx.ConsentStatus.FAILED)
                     ctx.add_log_entry(str(e), self.consent.internal_id)
@@ -489,21 +489,22 @@ class ArchiveAgent(object):
                 current_id = np.nan
 
                 with ctx.session_scope(conn) as s:
-                    pending = ctx.get_next_pending(session=s)
+                    pending = ctx.get_pending(session=s)
 
-                    if pending is not None:
-                        current_id = pending.internal_id
-                        ctx.add_log_entry(f'starting task for {pending.study_id}', cid=pending.internal_id)
+                    while len(pending) > 0:
+                        p = pending.pop()
+
+                        current_id = p.internal_id
+                        ctx.add_log_entry(f'starting task for {p.study_id}', cid=p.internal_id)
 
                         try:
-                            task = TakeOutExtractor(pending)
+                            task = TakeOutExtractor(p)
                             task.run()
 
-                            del task, pending
-                            gc.collect()
+                            ctx.commit(s)
                         except Exception as e:
-                            pending.set_status(ctx.ConsentStatus.FAILED)
-                            pending.update_synapse()
+                            p.set_status(ctx.ConsentStatus.FAILED)
+                            p.update_synapse()
                             raise e
 
                 # check for termination
