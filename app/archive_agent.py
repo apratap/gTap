@@ -398,7 +398,7 @@ class TakeOutExtractor(object):
                     cnt = self.push_to_synapse()
 
                     self.consent.clear_credentials()
-                    self.consent.notify_participant()
+                    self.consent.notify_admins()
 
                     self.__log_it(f'task for internal_id={self.consent.internal_id} completed. {cnt} files uploaded to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)

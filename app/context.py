@@ -284,11 +284,11 @@ class Consent(Base):
 
         self.update_synapse()
 
-    def notify_participant(self):
+    def notify_admins(self):
         try:
             x = dict(
                 study_id=self.study_id,
-                logs=[str(log) for log in sorted(self.logs, key=lambda x: x.ts)]
+                logs=[str(log) for log in sorted(self.logs, reverse=True)]
             )
             template = Template(secrets.PARTICIPANT_EMAIL_BODY)
 
@@ -296,7 +296,7 @@ class Consent(Base):
             response = client.send_email(
                 Source=secrets.FROM_STUDY_EMAIL,
                 Destination={
-                    'ToAddresses': [self.email] + secrets.ADMIN_EMAILS
+                    'ToAddresses': secrets.ADMIN_EMAILS
                 },
                 Message={
                     'Subject': {
