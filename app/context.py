@@ -264,7 +264,7 @@ class Consent(Base):
         session = inspect(self).session
         commit(session)
 
-        add_log_entry(f'credentials have been cleared', self.internal_id)
+        add_log_entry(f'credentials cleared', self.internal_id)
         self.update_synapse()
 
     def latest_archive_transactions(self, n=-1):
@@ -291,10 +291,23 @@ class Consent(Base):
         logs = self.latest_archive_transactions(n)
 
         if logs is not None and len(logs) > 0:
-            logs = [l for l in logs if 'not ready' not in l]
+            msg, start = '', None
 
-            msg = '; '.join([str(entry) for entry in logs])
-            msg = msg if len(msg) > 999 else msg[-996:] + '...'
+            for i, l in enumerate(logs[::-1]):
+                if 'not ready' in l or len(msg) >= 996:
+                    continue
+
+                if i != 0:
+                    msg += ';'
+
+                date = l.ts.strftime('%d%b%Y').upper()
+                if start != date:
+                    start = date
+                    msg += date
+
+                msg += f' {l.ts.strftime("%H:%d:%S")} {str(l.msg)}'
+
+            msg = msg if len(msg) <= 996 else msg[-996:] + '...'
 
             return msg
         else:
@@ -697,5 +710,9 @@ def daily_digest(conn=None):
 
 if __name__ == '__main__':
     # create_database(secrets.DATABASE)
-    build_synapse_table()
+    # build_synapse_table()
+
+    # with session_scope(secrets.DATABASE) as s:
+    #     consent = get_consent('anotherq', 26, s)
+    #     print(consent.notes())
     pass

@@ -175,16 +175,14 @@ class TakeOutExtractor(object):
                     'type': 'search_raw',
                     'path': filename
                 })
-                self.__log_it(f'searches downloaded successfully')
+                self.__log_it(f'searches downloaded')
 
                 return self.clean_search()
             else:
-                self.consent.add_search_error(f'search file for not found in takeout data')
+                self.consent.add_search_error(f'search data not in archive')
                 return False
         except Exception as e:
-            self.consent.add_search_error(
-                f'downloading searches failed with <{str(e)}>'
-            )
+            self.consent.add_search_error(f'downloading searches failed with <{str(e)}>')
             return False
 
     def clean_search(self):
@@ -254,10 +252,10 @@ class TakeOutExtractor(object):
             })
             df.to_csv(filename, index=None)
 
-            self.__log_it(f'searches redacted through DLP successfully')
+            self.__log_it(f'searches redacted')
             return True
         except Exception as e:
-            self.consent.add_search_error(f'DLP cleaning failed with <{str(e)}>')
+            self.consent.add_search_error(f'redaction failed with <{str(e)}>')
             return False
 
     def extract_gps(self):
@@ -290,13 +288,11 @@ class TakeOutExtractor(object):
                         'path': l
                     } for l in location_files
                 ]
-                self.__log_it(f'{len(location_files)} location part(s) downloaded successfully')
+                self.__log_it(f'{len(location_files)} location part(s) downloaded')
 
                 return self.clean_gps()
             else:
-                self.consent.add_location_error(
-                    f'location files not found in takeout data'
-                )
+                self.consent.add_location_error('location data not found in archive')
                 return False
         except Exception as e:
             self.consent.add_location_error(f'downloading location parts failed with <{str(e)}>')
@@ -389,7 +385,7 @@ class TakeOutExtractor(object):
                     self.consent.clear_credentials()
                     self.consent.notify_admins()
 
-                    self.__log_it(f'task completed. {cnt} files uploaded to Synapse')
+                    self.__log_it(f'{cnt} file {"s" if cnt > 1 else ""} put to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
                 except Exception as e:
                     ctx.add_log_entry(str(e), self.consent.internal_id)
@@ -481,7 +477,7 @@ class ArchiveAgent(object):
                         p = pending.pop()
 
                         current_id = p.internal_id
-                        ctx.add_log_entry(f'starting task for {p.study_id}', cid=p.internal_id)
+                        ctx.add_log_entry(f'starting task', cid=p.internal_id)
 
                         try:
                             task = TakeOutExtractor(p)
