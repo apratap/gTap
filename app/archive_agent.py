@@ -26,13 +26,21 @@ import app.context as ctx
 
 syn = secrets.syn
 
+"""generate a single authorized client for all tasks"""
 __dlp = dlp.DlpServiceClient()
 
 DRIVE_NOT_READY = 'drive not ready'
 
 
 class TakeOutExtractor(object):
+    """class for processing takeout data"""
+
     def __init__(self, consent):
+        """constructor
+
+        Args:
+            consent: (gtap.context.Consent) consent to process
+        """
         self.consent = consent
 
         self.__authorized_session = self.authorize_user_session()
@@ -44,6 +52,7 @@ class TakeOutExtractor(object):
         return f'<TakeOutExtractor({str(self.consent)})>'
 
     def __del__(self):
+        """make sure we don't leave any streams leaking or tmp files in the OS"""
         if hasattr(self, '__zip_stream') and self.__zip_stream is not None:
             self.__zip_stream.close()
             del self.__zip_stream
@@ -57,6 +66,11 @@ class TakeOutExtractor(object):
 
     @property
     def takeout_id(self):
+        """get the takeout id
+
+        Returns:
+            (str) to represent the id if the takeout data is ready else DRIVE_NOT_READY
+        """
         if self.__tid is not None:
             return self.__tid
         else:
@@ -77,6 +91,11 @@ class TakeOutExtractor(object):
         return ZipFile(self.__zip_stream)
 
     def authorize_user_session(self):
+        """authorize the HTTP session with consent credentials
+
+        Returns:
+            AuthorizedSession
+        """
         try:
             jdata = json.loads(self.consent.credentials)
 
@@ -100,10 +119,16 @@ class TakeOutExtractor(object):
                 self.__log_it('failed to authorize participant http session')
 
     def __log_it(self, s):
+        """add log message for associated consent. Synapse consents table is updated."""
         ctx.add_log_entry(s, cid=self.consent.internal_id)
         self.consent.update_synapse()
 
     def download_takeout_data(self):
+        """download takeout archive from Google Drive
+
+        Returns:
+            success flag as bool
+        """
         try:
             url = f'https://www.googleapis.com/drive/v3/files/{self.takeout_id}?alt=media'
             response = self.__authorized_session.get(url)
@@ -118,6 +143,11 @@ class TakeOutExtractor(object):
             return False
 
     def extract_searches(self):
+        """extract search data from takeout archive
+
+        Returns:
+            success flag as bool
+        """
         try:
             search_files = [f for f in self.zipped.namelist() if 'Search' in f]
 
@@ -186,6 +216,14 @@ class TakeOutExtractor(object):
             return False
 
     def clean_search(self):
+        """perform a tiny bit of pre-processing on search data, and redact through DLP
+
+        Notes: All individual search files are processed into one. Only unique search entries are redacted. Web visits
+        are not sent to the DLP API.
+
+        Returns:
+            success flag as bool
+        """
         try:
             dfs = [
                 pd.read_csv(f['path'])
@@ -259,6 +297,11 @@ class TakeOutExtractor(object):
             return False
 
     def extract_gps(self):
+        """extract GPS data from takeout archive
+
+        Returns:
+            success flag as bool
+        """
         try:
             gps_files = [
                 f for f in self.zipped.namelist()
@@ -299,6 +342,11 @@ class TakeOutExtractor(object):
             return False
 
     def clean_gps(self):
+        """clean GPS data
+
+        Returns:
+            success flag as bool
+        """
         try:
             parts, dfs = [f for f in self.__tmp_files if f['type'] == 'gps_part'], []
 
@@ -310,7 +358,7 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'study_id-{self.consent.study_id}_internal_id-{self.consent.internal_id}_location_history.csv'
+                    secrets.SYNAPSE_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
                 )
                 df.to_csv(filename, index=None)
 
@@ -328,6 +376,14 @@ class TakeOutExtractor(object):
             return False
 
     def push_to_synapse(self, force=False):
+        """upload all processed files to Synapse
+
+        Args:
+            force: (bool) optional flag to force overwrite if file exists
+
+        Returns:
+            (int) as number of files uploaded
+        """
         cnt = 0
 
         for tmp in self.__tmp_files:
@@ -371,9 +427,11 @@ class TakeOutExtractor(object):
                     self.__log_it(f'uploaded {t} data as {synid}')
                 except Exception as e:
                     self.__log_it(f'uploading {t} data failed with <{str(e)}>')
+                    return 0
         return cnt
 
     def run(self):
+        """perform the extraction process"""
         if self.takeout_id != DRIVE_NOT_READY:
             if self.download_takeout_data() and any([
                 self.extract_searches(),
@@ -385,7 +443,7 @@ class TakeOutExtractor(object):
                     self.consent.clear_credentials()
                     self.consent.notify_admins()
 
-                    self.__log_it(f'{cnt} file {"s" if cnt > 1 else ""} put to Synapse')
+                    self.__log_it(f'task complete. {cnt} file {"s" if cnt > 1 else ""} put to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
                 except Exception as e:
                     ctx.add_log_entry(str(e), self.consent.internal_id)
@@ -396,9 +454,20 @@ class TakeOutExtractor(object):
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
             self.__log_it(f'Google Drive for {self.consent.study_id} not ready')
 
+        return self
+
 
 class ArchiveAgent(object):
+    """class for managing archive tasks"""
+
     def __init__(self, conn, keep_alive=True, wait_time=None):
+        """constructor
+
+        Args:
+            conn: (dict) connection parameters for database
+            keep_alive: (bool) optional. restart agent if failure occurs
+            wait_time: (int) optional. seconds to wait between polling for new tasks. default=3600
+        """
         if wait_time is None:
             self.wait_time = get_wait_time_from_env()
         else:
@@ -423,24 +492,29 @@ class ArchiveAgent(object):
             os.mkdir(secrets.ARCHIVE_AGENT_TMP_DIR)
 
     def get_pid(self):
+        """get the process id from the running agent"""
         return self.__agent.pid
 
     def get_status(self):
+        """get the status of the agent"""
         return f'archive agent <pid={self.get_pid()}> is{" " if self.__agent.is_alive() else "not "}running'
 
     def start_async(self):
+        """start the agent as a forked process"""
         if not self.__agent.is_alive():
             self.__agent.start()
         else:
             pass
 
     def start(self):
+        """run the agent for one task polling iteration"""
         self.start_async()
 
         time.sleep(5)
         self.terminate()
 
     def terminate(self):
+        """signal the agent to terminate. block until current round of tasks is completed"""
         if self.__agent.is_alive():
             self.__sigkill.send(True)
             ctx.add_log_entry('signalled agent to terminate')
@@ -452,6 +526,7 @@ class ArchiveAgent(object):
         ctx.add_log_entry('agent terminated gracefully')
 
     def send_digest(self):
+        """send the daily digest if one has not already been sent today"""
         # check for digest send
         now = dt.date.today()
         if (now - self.__digest_date).days > 0:
@@ -461,13 +536,13 @@ class ArchiveAgent(object):
             pass
 
     def __run_agent(self, wait_time, conn, keep_alive, sigkill, done):
+        """code to run on forked agent process"""
         terminate = False
 
+        # continue to process until told to terminate
         while not terminate:
             try:
                 start = time.time()
-
-                # process tasks
                 current_id = np.nan
 
                 with ctx.session_scope(conn) as s:
@@ -480,17 +555,21 @@ class ArchiveAgent(object):
                         ctx.add_log_entry(f'starting task', cid=p.internal_id)
 
                         try:
-                            task = TakeOutExtractor(p)
-                            task.run()
+                            task = TakeOutExtractor(p).run()
 
+                            # make sure all updates have been persisted to backend
                             ctx.commit(s)
+
+                            # final call to update Synapse consents table
                             task.consent.update_synapse()
                         except Exception as e:
                             p.set_status(ctx.ConsentStatus.FAILED)
                             raise e
 
-                # check for termination
+                # check for termination signal (blocking for one second)
                 terminate = sigkill.poll(1)
+
+                # figure out how long we need to wait to keep task polling interval
                 if not terminate:
                     remaining = wait_time - (time.time() - start)
                     time.sleep(remaining if remaining > 0 else 0)
@@ -515,15 +594,24 @@ class ArchiveAgent(object):
 
 
 def get_wait_time_from_env():
+    """get task polling wait time
+
+    Notes:
+        return from environment variables, application config, or 3600 seconds in that order
+
+    Returns:
+        int
+    """
     if 'ARCHIVE_AGENT_WAIT_TIME' in os.environ:
         return float(os.environ['ARCHIVE_AGENT_WAIT_TIME'])
     elif hasattr(secrets, 'ARCHIVE_AGENT_WAIT_TIME'):
         return secrets.ARCHIVE_AGENT_WAIT_TIME
     else:
-        return 3600  # 1 hour
+        return 3600
 
 
 def parse_google_location_data(filename):
+    """parse GPS data from Takeout archive"""
     def arow(args):
         idx, row = args
 
@@ -580,11 +668,21 @@ def parse_google_location_data(filename):
 
 
 def does_exist(synid, name):
+    """determine whether a file exists in a Synapse entity
+
+    Args:
+        synid: (str) parent id to look within
+        name: (str) name of file to look for
+
+    Returns:
+        bool
+    """
     children = [child['name'] for child in list(syn.getChildren(synid))]
     return any([name in c for c in children])
 
 
 def send_daily_digest(conn=None):
+    """send the daily digest email"""
     try:
         digest = ctx.daily_digest(conn)
         template = Template(secrets.DIGEST_TEMPLATE)
@@ -616,6 +714,17 @@ def send_daily_digest(conn=None):
 
 
 def make_dlp_request(df):
+    """redact a dataframe through DLP
+    
+    Notes: each request is processed in parallel according to the number of threads defined by CLEANING_THREADS in 
+    the application config.
+    
+    Args:
+        df: (pandas.DataFrame)
+
+    Returns:
+        pandas.DataFrame with redacted data and added columns
+    """""
     df = df.copy()
 
     def inspect_wrapper(args):
@@ -654,10 +763,7 @@ def make_dlp_request(df):
 
     # run each query through DLP
     pool = TPool(secrets.CLEANING_THREADS)
-    results = pool.map(
-        inspect_wrapper,
-        [(idx, q.title) for idx, q in df.iterrows()]
-    )
+    results = pool.map(inspect_wrapper, [(idx, q.title) for idx, q in df.iterrows()])
 
     # process the results
     redacted = list(pool.map(process_results, results))
@@ -675,11 +781,25 @@ def make_dlp_request(df):
 
 
 def main():
+    """start the archive agent from command line
+
+    Command line arguments:
+        wait: seconds between poll to task db. default=3600
+        conn: database connection parameters. default defined in application config
+        k: keep alive. default=False
+
+    Examples:
+        The following will start the agent with default options
+        >>> python3 archive_agent.py
+
+        The following starts with a 30 minute poll interval and keep alive
+        >>> python3 archive_agent.py --wait 108000 --k 1
+    """
     parser = argparse.ArgumentParser(description='--')
     parser.add_argument(
         '--wait',
         type=int,
-        help='interval in minutes between poll to task db',
+        help='interval in seconds between poll to task db',
         required=False
     )
     parser.add_argument(
@@ -697,9 +817,7 @@ def main():
 
     wait_time = parser.parse_args().wait
     if wait_time is None:
-        wait_time = 600
-    else:
-        wait_time *= 60
+        wait_time = 3600
 
     conn = parser.parse_args().conn
     if conn is None:
@@ -722,12 +840,4 @@ def main():
 
 
 if __name__ == '__main__':
-    # build_synapse_log()
     main()
-    # send_daily_digest()
-    #
-    # searches = pd.DataFrame(
-    #     ['my name is luke', 'my phone is 9105747996', 'job market in alaska'],
-    #     columns=['title']
-    # )
-    # make_dlp_request(searches)

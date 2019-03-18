@@ -23,6 +23,8 @@ PROJECT_SYNID  = ''
 LOCATION_SYNID = ''
 SEARCH_SYNID   = ''
 CONSENTS_SYNID = ''
+SYNAPSE_RETRIES = 0
+SYNAPSE_NAMING_CONVENTION = 'test_%s-text_%s.csv'
 
 # ----------------------------------------------------------------------------------------------------------------------
 # SSL

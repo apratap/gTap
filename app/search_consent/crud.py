@@ -5,6 +5,7 @@ from pytz import timezone
 
 import app.context as ctx
 from app.search_consent import oauth2
+import app.config as secrets
 
 crud = Blueprint('crud', __name__)
 
@@ -34,7 +35,7 @@ def download():
         except KeyError:
             data['last_name'] = 'na'
 
-        now = dt.datetime.now(timezone('US/Pacific'))
+        now = dt.datetime.now(timezone(secrets.TIMEZONE))
         data['consent_dt'] = now
 
         data['credentials'] = session['google_oauth2_credentials']
@@ -45,10 +46,3 @@ def download():
         Process(target=ctx.add_task, args=(data,)).start()
 
         return 'task submitted'
-
-
-@crud.route('/thanks', methods=['GET'])
-@oauth2.required
-def thanks():
-    if request.method == 'GET':
-        return render_template('thanks.html')

@@ -21,6 +21,14 @@ def start_archive_agent():
 
 
 def is_current():
+    """determine whether existing SSL certificates are current
+
+    Notes:
+        'current' is defined by the application config var LE_REFRESH_RATE
+
+    Returns:
+        success flag as bool
+    """
     path = os.path.join(config.LEDIR, config.EBS_CERT_PREFIX)
 
     if not os.path.exists(path):
@@ -38,6 +46,7 @@ def is_current():
 
 
 def get_certs_from_s3():
+    """download certificates that have been backed up to S3"""
     cert_files = s3_client.list_objects_v2(
         Bucket=config.EBS_BUCKET, Delimiter=',', Prefix=config.EBS_CERT_PREFIX
     )
@@ -57,6 +66,7 @@ def get_certs_from_s3():
 
 
 def backup_certs():
+    """backup the issued SSL certificates to S3"""
     root = os.path.join(config.LEDIR, config.EBS_CERT_PREFIX)
 
     for path, dirs, files in os.walk(root):
@@ -69,6 +79,7 @@ def backup_certs():
 
 
 def configure_ssl_certs():
+    """get a new set of SSL certificates from LetsEncrypt"""
     os.chdir(config.WORKING_DIR)
 
     if not is_current():
