@@ -101,6 +101,7 @@ class TakeOutExtractor(object):
 
     def __log_it(self, s):
         ctx.add_log_entry(s, cid=self.consent.internal_id)
+        self.consent.update_synapse()
 
     def download_takeout_data(self):
         try:
@@ -113,9 +114,7 @@ class TakeOutExtractor(object):
             else:
                 return False
         except Exception as e:
-            self.__log_it(
-                f'downloading takeout data for internal_id={self.consent.internal_id} failed with error={str(e)}'
-            )
+            self.__log_it(f'downloading takeout data failed with error={str(e)}')
             return False
 
     def extract_searches(self):
@@ -176,17 +175,15 @@ class TakeOutExtractor(object):
                     'type': 'search_raw',
                     'path': filename
                 })
-                self.__log_it(f'searches for internal_id={self.consent.internal_id} downloaded successfully')
+                self.__log_it(f'searches downloaded successfully')
 
                 return self.clean_search()
             else:
-                self.consent.add_search_error(
-                    f'search file for {self.consent.internal_id} not found in takeout data'
-                )
+                self.consent.add_search_error(f'search file for not found in takeout data')
                 return False
         except Exception as e:
             self.consent.add_search_error(
-                f'downloading searches for internal_id={self.consent.internal_id} failed with error={str(e)}'
+                f'downloading searches failed with error={str(e)}'
             )
             return False
 
@@ -257,7 +254,7 @@ class TakeOutExtractor(object):
             })
             df.to_csv(filename, index=None)
 
-            self.__log_it(f'searches for internal_id={self.consent.internal_id} redacted through DLP successfully')
+            self.__log_it(f'searches redacted through DLP successfully')
             return True
         except Exception as e:
             self.consent.add_search_error(f'DLP cleaning internal_id={self.consent.internal_id} failed with error={str(e)}')
@@ -293,20 +290,16 @@ class TakeOutExtractor(object):
                         'path': l
                     } for l in location_files
                 ]
-                self.__log_it(
-                    f'{len(location_files)} location part(s) for internal_id={self.consent.internal_id} downloaded successfully'
-                )
+                self.__log_it(f'{len(location_files)} location part(s) downloaded successfully')
 
                 return self.clean_gps()
             else:
                 self.consent.add_location_error(
-                    f'location files for internal_id={self.consent.internal_id} not found in takeout data'
+                    f'location files not found in takeout data'
                 )
                 return False
         except Exception as e:
-            self.consent.add_location_error(
-                f'downloading location parts for internal_id={self.consent.internal_id} failed with error={str(e)}'
-            )
+            self.consent.add_location_error(f'downloading location parts failed with error={str(e)}')
             return False
 
     def clean_gps(self):
@@ -329,14 +322,14 @@ class TakeOutExtractor(object):
                     'type': 'gps_processed',
                     'path': filename
                 })
-                self.__log_it(f'parsing location data for internal_id={self.consent.internal_id} completed successfully')
+                self.__log_it(f'parsing location data completed successfully')
 
                 return True
             else:
                 return False
         except Exception as e:
             self.consent.add_location_error(
-                f'parsing location data for internal_id={str(self.consent.internal_id)} failed with error={str(e)}'
+                f'parsing location data failed with error={str(e)}'
             )
             return False
 
@@ -381,10 +374,10 @@ class TakeOutExtractor(object):
                     )
 
                     cnt += 1
-                    self.__log_it(f'uploaded {t} data as {synid} for internal_id={self.consent.internal_id}')
+                    self.__log_it(f'uploaded {t} data as {synid}')
                 except Exception as e:
                     self.__log_it(
-                        f'uploading {t} data for internal_id={self.consent.internal_id} failed with error={str(e)}'
+                        f'uploading {t} data failed with error={str(e)}'
                     )
         return cnt
 
@@ -400,18 +393,15 @@ class TakeOutExtractor(object):
                     self.consent.clear_credentials()
                     self.consent.notify_admins()
 
-                    self.__log_it(f'task for internal_id={self.consent.internal_id} completed. {cnt} files uploaded to Synapse')
+                    self.__log_it(f'task completed. {cnt} files uploaded to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
-                    self.consent.update_synapse()
                 except Exception as e:
-                    self.consent.set_status(ctx.ConsentStatus.FAILED)
                     ctx.add_log_entry(str(e), self.consent.internal_id)
-                    self.consent.update_synapse()
+                    self.consent.set_status(ctx.ConsentStatus.FAILED)
             else:
                 pass
         else:
             self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
-            self.consent.update_synapse()
             self.__log_it(f'Google Drive for {self.consent.study_id} not ready')
 
 
@@ -504,7 +494,6 @@ class ArchiveAgent(object):
                             ctx.commit(s)
                         except Exception as e:
                             p.set_status(ctx.ConsentStatus.FAILED)
-                            p.update_synapse()
                             raise e
 
                 # check for termination

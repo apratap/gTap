@@ -163,7 +163,7 @@ class Consent(Base):
         return not self.__eq__(other)
 
     def __gt__(self, other):
-        return self.latest_access >= other.latest_access
+        return self.last_modified >= other.last_modified
 
     @property
     def credentials(self):
@@ -183,16 +183,9 @@ class Consent(Base):
             'consent_dt': self.consent_dt,
             'location_sid': self.location_sid,
             'search_sid': self.search_sid,
-            'notes': [l.dict for l in sorted(self.logs, key=lambda x: x.ts)],
+            'notes': [l.dict for l in sorted(self.logs)],
             'status': self.status
         }
-
-    @property
-    def notes(self):
-        logs = sorted(self.logs, key=lambda x: x.ts)
-        return '  ' + str(logs[0]) + '\n  ' + '\n  '.join([
-            str(entry) for entry in logs[1:]
-        ])
 
     @hybrid_property
     def date(self):
@@ -203,18 +196,9 @@ class Consent(Base):
         return np.ceil((dt.datetime.now()-self.consent_dt).seconds/3600)
 
     @property
-    def latest_access(self):
-        latest = self.latest_archive_transaction
-        if latest is None:
-            return self.consent_dt
-        return latest.ts
-
-    @property
-    def latest_archive_transaction(self):
-        log = sorted(self.logs, key=lambda x: x.ts)
-        if len(log) > 0:
-            return log[-1]
-        return None
+    def last_modified(self):
+        latest = self.latest_archive_transactions(1)
+        return latest[0].ts if latest is not None else self.consent_dt
 
     @staticmethod
     def __encrypt(data):
@@ -243,6 +227,8 @@ class Consent(Base):
 
         if failed:
             self.set_status(ConsentStatus.FAILED)
+
+        self.update_synapse()
         return self
 
     def add_location_error(self, msg=None, session=None):
@@ -263,6 +249,8 @@ class Consent(Base):
 
         if failed:
             self.set_status(ConsentStatus.FAILED)
+
+        self.update_synapse()
         return self
 
     def clear_credentials(self):
@@ -272,6 +260,16 @@ class Consent(Base):
         commit(session)
 
         add_log_entry(f'credentials for study_id={self.study_id} have been cleared', self.internal_id)
+        self.update_synapse()
+
+    def latest_archive_transactions(self, n=1):
+        logs = sorted(self.logs)
+
+        if logs is not None and len(logs) > 0:
+            n = n if len(logs) >= n else len(logs)
+            return logs[-n:]
+
+        return None
 
     def mark_as_drive_failure(self):
         self.set_status(ConsentStatus.FAILED)
@@ -283,6 +281,18 @@ class Consent(Base):
         )
 
         self.update_synapse()
+
+    def notes(self, n=2):
+        logs = self.latest_archive_transactions(n)
+
+        if logs is not None and len(logs) > 0:
+            prefix = '  ' if len(logs) > n else '  ...'
+
+            return prefix + str(logs[0]) + '\n  ' + '\n  '.join([
+                str(entry) for entry in logs[1:]
+            ])
+        else:
+            return 'none'
 
     def notify_admins(self):
         try:
@@ -318,6 +328,9 @@ class Consent(Base):
             return response
 
     def put_to_synapse(self):
+        if self.internal_id is None:
+            return
+        
         rmeow = dt.datetime.now(tz("US/Pacific")).strftime(secrets.DTFORMAT).upper()
 
         data = [[
@@ -326,7 +339,7 @@ class Consent(Base):
             rmeow,
             self.location_sid,
             self.search_sid,
-            self.notes
+            self.notes()
         ]]
 
         retries = 10
@@ -380,6 +393,7 @@ class Consent(Base):
 
     def set_status(self, status):
         self.status = status.value
+        self.update_synapse()
 
     def update_synapse(self):
         results = syn.tableQuery(
@@ -393,7 +407,7 @@ class Consent(Base):
         else:
             results['location_sid'] = self.location_sid
             results['search_sid'] = self.search_sid
-            results['notes'] = str(self.latest_archive_transaction)
+            results['notes'] = self.notes()
 
             syn.store(Table(SYN_SCHEMA, results))
 
@@ -429,7 +443,16 @@ class LogEntry(Base):
     def __str__(self):
         return f'{self.ts_formatted}: {self.msg}'
 
+    def __eq__(self, other):
+        return self.id == other.id or self.cid == other.cid and self.ts == other.ts and self.msg == other.msg
 
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __gt__(self, other):
+        return self.ts > other.ts
+
+    
 # ----------------------------------------------------------------------------------------------------------------------
 # Database Context
 # ----------------------------------------------------------------------------------------------------------------------
