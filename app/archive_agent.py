@@ -484,6 +484,7 @@ class ArchiveAgent(object):
                             task.run()
 
                             ctx.commit(s)
+                            task.consent.update_synapse()
                         except Exception as e:
                             p.set_status(ctx.ConsentStatus.FAILED)
                             raise e
