@@ -267,11 +267,11 @@ class Consent(Base):
         add_log_entry(f'credentials have been cleared', self.internal_id)
         self.update_synapse()
 
-    def latest_archive_transactions(self, n=1):
+    def latest_archive_transactions(self, n=-1):
         logs = sorted(self.logs, reverse=True)
 
         if logs is not None and len(logs) > 0:
-            n = n if len(logs) >= n else len(logs)
+            n = n if -1 < n <= len(logs) else len(logs)
             return logs[-n:]
 
         return None
@@ -287,15 +287,16 @@ class Consent(Base):
 
         self.update_synapse()
 
-    def notes(self, n=2):
+    def notes(self, n=-1):
         logs = self.latest_archive_transactions(n)
 
         if logs is not None and len(logs) > 0:
-            prefix = '  ' if len(logs) > n else '  ...'
+            logs = [l for l in logs if 'not ready' not in l]
 
-            return prefix + str(logs[0]) + '\n  ' + '\n  '.join([
-                str(entry) for entry in logs[1:]
-            ])
+            msg = '; '.join([str(entry) for entry in logs])
+            msg = msg if len(msg) > 999 else msg[-996:] + '...'
+
+            return msg
         else:
             return 'none'
 
@@ -328,7 +329,7 @@ class Consent(Base):
                 ReplyToAddresses=[secrets.FROM_STUDY_EMAIL]
             )
         except ClientError as e:
-            raise Exception(f'email failed with error: {str(e.response["Error"]["Message"])}')
+            raise Exception(f'email failed with <{str(e.response["Error"]["Message"])}>')
         else:
             return response
 
@@ -456,6 +457,9 @@ class LogEntry(Base):
 
     def __gt__(self, other):
         return self.ts > other.ts
+
+    def __contains__(self, item):
+        return item in self.msg
 
     
 # ----------------------------------------------------------------------------------------------------------------------

@@ -114,7 +114,7 @@ class TakeOutExtractor(object):
             else:
                 return False
         except Exception as e:
-            self.__log_it(f'downloading takeout data failed with error={str(e)}')
+            self.__log_it(f'downloading takeout data failed with <{str(e)}>')
             return False
 
     def extract_searches(self):
@@ -183,7 +183,7 @@ class TakeOutExtractor(object):
                 return False
         except Exception as e:
             self.consent.add_search_error(
-                f'downloading searches failed with error={str(e)}'
+                f'downloading searches failed with <{str(e)}>'
             )
             return False
 
@@ -257,7 +257,7 @@ class TakeOutExtractor(object):
             self.__log_it(f'searches redacted through DLP successfully')
             return True
         except Exception as e:
-            self.consent.add_search_error(f'DLP cleaning internal_id={self.consent.internal_id} failed with error={str(e)}')
+            self.consent.add_search_error(f'DLP cleaning failed with <{str(e)}>')
             return False
 
     def extract_gps(self):
@@ -299,7 +299,7 @@ class TakeOutExtractor(object):
                 )
                 return False
         except Exception as e:
-            self.consent.add_location_error(f'downloading location parts failed with error={str(e)}')
+            self.consent.add_location_error(f'downloading location parts failed with <{str(e)}>')
             return False
 
     def clean_gps(self):
@@ -328,9 +328,7 @@ class TakeOutExtractor(object):
             else:
                 return False
         except Exception as e:
-            self.consent.add_location_error(
-                f'parsing location data failed with error={str(e)}'
-            )
+            self.consent.add_location_error(f'parsing location data failed with <{str(e)}>')
             return False
 
     def push_to_synapse(self, force=False):
@@ -376,9 +374,7 @@ class TakeOutExtractor(object):
                     cnt += 1
                     self.__log_it(f'uploaded {t} data as {synid}')
                 except Exception as e:
-                    self.__log_it(
-                        f'uploading {t} data failed with error={str(e)}'
-                    )
+                    self.__log_it(f'uploading {t} data failed with <{str(e)}>')
         return cnt
 
     def run(self):
@@ -617,7 +613,7 @@ def send_daily_digest(conn=None):
             ReplyToAddresses=[secrets.FROM_STUDY_EMAIL]
         )
     except ClientError as e:
-        raise Exception(f'email failed with error: {str(e.response["Error"]["Message"])}')
+        raise Exception(f'email failed with <{str(e.response["Error"]["Message"])}>')
     else:
         return response
 
