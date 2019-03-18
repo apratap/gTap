@@ -228,6 +228,7 @@ class Consent(Base):
         if failed:
             self.set_status(ConsentStatus.FAILED)
 
+        self.clear_credentials()
         self.update_synapse()
         return self
 
@@ -250,20 +251,24 @@ class Consent(Base):
         if failed:
             self.set_status(ConsentStatus.FAILED)
 
+        self.clear_credentials()
         self.update_synapse()
         return self
 
     def clear_credentials(self):
+        if self.data is None:
+            return
+
         self.data = None
 
         session = inspect(self).session
         commit(session)
 
-        add_log_entry(f'credentials for study_id={self.study_id} have been cleared', self.internal_id)
+        add_log_entry(f'credentials have been cleared', self.internal_id)
         self.update_synapse()
 
     def latest_archive_transactions(self, n=1):
-        logs = sorted(self.logs)
+        logs = sorted(self.logs, reverse=True)
 
         if logs is not None and len(logs) > 0:
             n = n if len(logs) >= n else len(logs)
