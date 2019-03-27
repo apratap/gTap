@@ -209,7 +209,7 @@ class TakeOutExtractor(object):
 
                 return self.clean_search()
             else:
-                self.consent.add_search_error(f'search data not in archive')
+                self.consent.add_search_error(f'search data not found in archive')
                 return False
         except Exception as e:
             self.consent.add_search_error(f'downloading searches failed with <{str(e)}>')
@@ -282,7 +282,7 @@ class TakeOutExtractor(object):
 
             filename = os.path.join(
                 secrets.ARCHIVE_AGENT_TMP_DIR,
-                f'study_id-{self.consent.study_id}_internal_id-{self.consent.internal_id}_redacted_search_history.csv'
+                secrets.SYNAPSE_SEARCH_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
             )
             self.__tmp_files.append({
                 'type': 'search_redacted',
@@ -358,7 +358,7 @@ class TakeOutExtractor(object):
 
                 filename = os.path.join(
                     secrets.ARCHIVE_AGENT_TMP_DIR,
-                    secrets.SYNAPSE_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
+                    secrets.SYNAPSE_LOCATION_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
                 )
                 df.to_csv(filename, index=None)
 

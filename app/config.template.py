@@ -23,8 +23,15 @@ PROJECT_SYNID  = ''
 LOCATION_SYNID = ''
 SEARCH_SYNID   = ''
 CONSENTS_SYNID = ''
+
+"""how many times to retry an interaction with Synapse if a failure is exprienced"""
 SYNAPSE_RETRIES = 0
-SYNAPSE_NAMING_CONVENTION = 'test_%s-text_%s.csv'
+
+"""naming convention for location files"""
+SYNAPSE_LOCATION_NAMING_CONVENTION = ''
+
+"""naming convention for search files"""
+SYNAPSE_SEARCH_NAMING_CONVENTION = ''
 
 # ----------------------------------------------------------------------------------------------------------------------
 # SSL
