@@ -11,7 +11,6 @@ import boto3
 from jinja2 import Template
 import numpy as np
 
-
 import app.config as secrets
 import app.context as ctx
 from app.xtractor import TakeOutExtractor

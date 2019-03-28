@@ -1,11 +1,14 @@
 #!/bin/env python
 
+import argparse
 import datetime as dt
 import gc
 from io import BytesIO
 import json
 from multiprocessing.dummy import Pool as TPool
 import os
+from pytz import timezone as tz
+import sys
 from zipfile import ZipFile
 
 import google.cloud.dlp as dlp
@@ -29,7 +32,7 @@ DRIVE_NOT_READY = 'drive not ready'
 class TakeOutExtractor(object):
     """class for processing takeout data"""
 
-    def __init__(self, consent):
+    def __init__(self, consent, **kwargs):
         """constructor
 
         Args:
@@ -37,7 +40,16 @@ class TakeOutExtractor(object):
         """
         self.consent = consent
 
-        self.__authorized_session = self.authorize_user_session()
+        self.__archive_path = None
+        self.__authorized_session = None
+        self.__local = False
+
+        if 'archive_path' in kwargs.keys():
+            self.__archive_path = kwargs['archive_path']
+            self.__local = True
+        else:
+            self.__authorized_session = self.authorize_user_session()
+
         self.__zip_stream = None
         self.__tmp_files = []
         self.__tid = None
@@ -67,6 +79,11 @@ class TakeOutExtractor(object):
         """
         if self.__tid is not None:
             return self.__tid
+
+        elif self.__archive_path is not None:
+            self.__tid = 'local'
+            return self.__tid
+
         else:
             to_file = self.__authorized_session.get(secrets.TAKEOUT_URL)
             df = pd.DataFrame.from_records(json.loads(to_file.content)['files'])
@@ -112,8 +129,19 @@ class TakeOutExtractor(object):
             else:
                 self.__log_it('failed to authorize participant http session')
 
+    def __filename(self, p):
+        if self.__local:
+            filename = os.path.join(os.getcwd(), p)
+        else:
+            filename = os.path.join(secrets.ARCHIVE_AGENT_TMP_DIR, p)
+
+        return filename
+
     def __log_it(self, s):
         """add log message for associated consent. Synapse consents table is updated."""
+        if self.__local:
+            print(f'{dt.datetime.now(tz(secrets.TIMEZONE)).strftime(secrets.DTFORMAT).upper()}: {s}')
+
         ctx.add_log_entry(s, cid=self.consent.internal_id)
         self.consent.update_synapse()
 
@@ -123,17 +151,36 @@ class TakeOutExtractor(object):
         Returns:
             success flag as bool
         """
+        if self.__authorized_session is None:
+            return False
+
         try:
             url = f'https://www.googleapis.com/drive/v3/files/{self.takeout_id}?alt=media'
             response = self.__authorized_session.get(url)
 
             if response.status_code == 200:
                 self.__zip_stream = BytesIO(response.content)
+                self.__log_it(f'takeout archive downloaded')
                 return True
             else:
                 return False
         except Exception as e:
             self.__log_it(f'downloading takeout data failed with <{str(e)}>')
+            return False
+
+    def load_from_local(self):
+        """load takeout archive from local filesystem"""
+        if self.__archive_path is None:
+            return False
+
+        try:
+            with open(self.__archive_path, 'rb') as f:
+                self.__zip_stream = BytesIO(f.read())
+            
+            self.__log_it('takeout archive loaded from filesystem')
+            return True
+        except Exception as e:
+            self.__log_it(f'loading takeout data from filesystem failed with <{str(e)}>')
             return False
 
     def extract_searches(self):
@@ -189,17 +236,14 @@ class TakeOutExtractor(object):
                 search_queries['action'] = actions
                 search_queries['title'] = titles
 
-                filename = os.path.join(
-                    secrets.ARCHIVE_AGENT_TMP_DIR,
-                    f'search_raw_{str(self.consent.internal_id)}.csv'
-                )
+                filename = self.__filename(f'search_raw_{str(self.consent.internal_id)}.csv')
                 search_queries.to_csv(filename, index=None)
 
                 self.__tmp_files.append({
                     'type': 'search_raw',
                     'path': filename
                 })
-                self.__log_it(f'searches downloaded')
+                self.__log_it(f'searches extracted')
 
                 return self.clean_search()
             else:
@@ -274,8 +318,7 @@ class TakeOutExtractor(object):
 
             [fx(x) for x in idx_map.loc[idx_map.ref.notna()].itertuples()]
 
-            filename = os.path.join(
-                secrets.ARCHIVE_AGENT_TMP_DIR,
+            filename = self.__filename(
                 secrets.SYNAPSE_SEARCH_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
             )
             self.__tmp_files.append({
@@ -304,10 +347,9 @@ class TakeOutExtractor(object):
 
             if len(gps_files) > 0:
                 def write_json(count, f):
-                    filename = '%s_%s_%s_GPS.json' % (
+                    filename = self.__filename('%s_%s_%s_GPS.json' % (
                         str(self.consent.study_id), self.consent.internal_id, count + 1
-                    )
-                    filename = os.path.join(secrets.ARCHIVE_AGENT_TMP_DIR, filename)
+                    ))
 
                     with open(filename, 'wb') as out:
                         out.write(self.zipped.open(f).read())
@@ -325,7 +367,7 @@ class TakeOutExtractor(object):
                         'path': l
                     } for l in location_files
                 ]
-                self.__log_it(f'{len(location_files)} location part(s) downloaded')
+                self.__log_it(f'{len(location_files)} location part(s) extracted')
 
                 return self.clean_gps()
             else:
@@ -350,8 +392,7 @@ class TakeOutExtractor(object):
 
                 df = pd.concat(dfs, sort=False).sort_values(by='ts')
 
-                filename = os.path.join(
-                    secrets.ARCHIVE_AGENT_TMP_DIR,
+                filename = self.__filename(
                     secrets.SYNAPSE_LOCATION_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
                 )
                 df.to_csv(filename, index=None)
@@ -427,7 +468,7 @@ class TakeOutExtractor(object):
     def run(self):
         """perform the extraction process"""
         if self.takeout_id != DRIVE_NOT_READY:
-            if self.download_takeout_data() and any([
+            if self.download_takeout_data() or self.load_from_local() and any([
                 self.extract_searches(),
                 self.extract_gps()
             ]):
@@ -587,3 +628,99 @@ def parse_google_location_data(filename):
 
     js = js.sort_values(by='ts')
     return js
+
+
+def process_from_local(study_id, consent_dt, path):
+    """process a takeout archive located in the local filesystem
+
+    Args:
+        study_id: (str) participant's study id
+        consent_dt: (datetime) datetime the participant consented
+        path: (str) path to takeout archive
+    """
+    args = {
+        'study_id': study_id,
+        'consent_dt': consent_dt,
+    }
+
+    with ctx.session_scope(secrets.DATABASE) as s:
+        consent = ctx.add_entity(s, ctx.Consent(**args))
+
+        consent.set_status(ctx.ConsentStatus.PROCESSING)
+        ctx.add_log_entry(f'starting task', cid=consent.internal_id)
+
+        try:
+            task = TakeOutExtractor(consent, archive_path=path).run()
+
+            # make sure all updates have been persisted to backend
+            ctx.commit(s)
+
+            # final call to update Synapse consents table
+            task.consent.update_synapse()
+        except Exception as e:
+            consent.set_status(ctx.ConsentStatus.FAILED)
+            print(e)
+            return 1
+    return 0
+
+
+def main():
+    """run the takeout extractor from the command line
+
+    Command line arguments:
+        studyid: (str) study id for participant
+        dt: (str) datetime as a string in the format '%m/%d/%Y-%Z-%H:%M:%S'
+        path: (str) path to takeout archive
+
+    Examples:
+        >>> python3 xtractor.py --studyid testcase --dt 03/28/2019-UTC-11:07:00 --path /home/luke/to.zip
+    """
+    parser = argparse.ArgumentParser(description='--')
+    parser.add_argument(
+        '--studyid',
+        type=str,
+        help='study id',
+        required=True
+    )
+    parser.add_argument(
+        '--dt',
+        type=str,
+        help="""
+        dd/mon/year-TZ-hr:min:sec 
+            dd:   2 digit day
+            mon:  2 digit month
+            year: 4 digit year
+            TZ:   timezone as defined by https://docs.python.org/2/library/datetime.html
+        """,
+        required=True
+    )
+    parser.add_argument(
+        '--path',
+        type=str,
+        help='file path to takeout zipfile',
+        required=True
+    )
+
+    args = parser.parse_args()
+
+    # verify consent date is in correct format
+    fmt = '%m/%d/%Y-%Z-%H:%M:%S'
+    try:
+        consent_dt = dt.datetime.strptime(args.dt, fmt)
+    except ValueError as e:
+        print(e)
+        return 1
+
+    # verify takeout zipfile exists
+    if not os.path.exists(args.path):
+        print(f'takeout archive does not exist at {args.path}')
+        return 1
+    else:
+        path = args.path
+
+    exit_code = process_from_local(args.studyid, consent_dt, path)
+    return exit_code
+
+
+if __name__ == '__main__':
+    sys.exit(main())
