@@ -143,7 +143,12 @@ class Consent(Base):
     def __init__(self, **kwargs):
         self.study_id = kwargs['study_id']
         self.consent_dt = kwargs['consent_dt']
-        self.data = self.__encrypt(kwargs['credentials'])
+
+        if kwargs.get('credentials') is not None:
+            self.data = self.__encrypt(kwargs['credentials'])
+        else:
+            self.data = None
+
         self.location_sid = kwargs.get('location_sid')
         self.search_sid = kwargs.get('search_sid')
         self.email = kwargs.get('email')
@@ -171,6 +176,9 @@ class Consent(Base):
     @property
     def credentials(self):
         """decrypt oauth credentials"""
+        if self.data is None:
+            raise ValueError('credentials do not exist for participant')
+
         s = cypher.decrypt(self.data)
         s = s.decode('utf-8')
 
@@ -419,13 +427,11 @@ class Consent(Base):
         """generate a new row in Synapse table for this consent"""
         if self.internal_id is None:
             return
-        
-        rmeow = dt.datetime.now(tz(secrets.TIMEZONE)).strftime(secrets.DTFORMAT).upper()
 
         data = [[
             self.study_id,
             self.internal_id,
-            rmeow,
+            self.consent_dt.strftime(secrets.DTFORMAT).upper(),
             self.location_sid,
             self.search_sid,
             self.notes()
