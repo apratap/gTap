@@ -468,7 +468,7 @@ class TakeOutExtractor(object):
     def run(self):
         """perform the extraction process"""
         if self.takeout_id != DRIVE_NOT_READY:
-            if self.download_takeout_data() or self.load_from_local() and any([
+            if (self.download_takeout_data() or self.load_from_local()) and any([
                 self.extract_searches(),
                 self.extract_gps()
             ]):
@@ -673,7 +673,7 @@ def main():
         path: (str) path to takeout archive
 
     Examples:
-        >>> python3 xtractor.py --studyid testcase --dt 03/28/2019-UTC-11:07:00 --path /home/luke/to.zip
+        >>> python3 xtractor.py --studyid testcase --dt "03/28/2019-UTC-11:07:00" --path "/home/luke/to.zip"
     """
     parser = argparse.ArgumentParser(description='--')
     parser.add_argument(
