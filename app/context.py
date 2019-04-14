@@ -326,10 +326,13 @@ class Consent(Base):
 
         return None
 
-    def mark_as_drive_failure(self):
+    def mark_as_failure(self, s=None):
         """mark this consent as failed
 
         Notes: log message is submitted, status is set to failed, credentials are cleared, and Synapse is updated
+
+        Args:
+            s: (str) optional message for log entry
 
         Returns:
             None
@@ -337,10 +340,13 @@ class Consent(Base):
         self.set_status(ConsentStatus.FAILED)
         self.clear_credentials()
 
-        add_log_entry(
-            f'Marked as failed. Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT / 3600)} hours.',
-            self.internal_id
-        )
+        if s is None:
+            add_log_entry(
+                f'Marked as failed. Google Drive not ready after {int(secrets.MAX_TIME_FOR_DRIVE_WAIT / 3600)} hours.',
+                self.internal_id
+            )
+        else:
+            add_log_entry(s, self.internal_id)
 
         self.update_synapse()
 
@@ -825,7 +831,7 @@ def get_pending(conn=None, session=None):
 
         if p.status == ConsentStatus.DRIVE_NOT_READY.value:
             if p.seconds_since_consent() > secrets.MAX_TIME_FOR_DRIVE_WAIT:
-                p.mark_as_drive_failure()
+                p.mark_as_failure()
 
             elif p.seconds_since_last_drive_attempt() < secrets.WAIT_TIME_BETWEEN_DRIVE_NOT_READY:
                 pass
