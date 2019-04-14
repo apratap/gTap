@@ -91,10 +91,10 @@ class TakeOutExtractor(object):
             response = self.__authorized_session.get(secrets.TAKEOUT_URL)
 
             if response.status_code == 200:
-                content = response.content.get('files')
+                content = json.loads(response.content).get('files')
 
                 if content is not None:
-                    df = pd.DataFrame.from_records(json.loads(content))
+                    df = pd.DataFrame.from_records(content)
 
                     if len(df) > 0:
                         df['timeStamp'] = df.name.str.split('-', 3).apply(lambda x: x[1])
