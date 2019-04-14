@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 from multiprocessing import Pipe, Process
 import os
+import sys
 import time
 
 from botocore.exceptions import ClientError
@@ -113,17 +114,13 @@ class ArchiveAgent(object):
                         current_id = p.internal_id
                         ctx.add_log_entry(f'starting task', cid=p.internal_id)
 
-                        try:
-                            task = TakeOutExtractor(p).run()
+                        task = TakeOutExtractor(p).run()
 
-                            # make sure all updates have been persisted to backend
-                            ctx.commit(s)
+                        # make sure all updates have been persisted to backend
+                        ctx.commit(s)
 
-                            # final call to update Synapse consents table
-                            task.consent.update_synapse()
-                        except Exception as e:
-                            p.set_status(ctx.ConsentStatus.FAILED)
-                            raise e
+                        # final call to update Synapse consents table
+                        task.consent.update_synapse()
 
                 # check for termination signal (blocking for one second)
                 terminate = sigkill.poll(1)
@@ -138,10 +135,15 @@ class ArchiveAgent(object):
                 self.send_digest()
             except Exception as e:
                 ctx.mark_as_permanently_failed(current_id)
-                ctx.add_log_entry(
-                    f'agent terminated unexpectedly. {str(e.__class__)}: {", ".join([a for a in e.args])}',
-                    cid=current_id
-                )
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+
+                msg = 'agent terminated unexpectedly: ' + \
+                    f'<Type ({exc_type})>; ' + \
+                    f'<Args ({", ".join([a for a in e.args])})>; ' + \
+                    f'<File ({os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]})>; ' + \
+                    f'<LineNo ({exc_tb.tb_lineno})>'\
+
+                ctx.add_log_entry(msg, cid=current_id)
 
                 if not keep_alive:
                     ctx.add_log_entry('agent shutting down')
