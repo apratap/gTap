@@ -26,7 +26,10 @@ syn = secrets.syn
 """generate a single authorized client for all tasks"""
 __dlp = dlp.DlpServiceClient()
 
+"""takeout errors"""
 DRIVE_NOT_READY = 'drive not ready'
+ARCHIVE_STRUCTURE_FAILURE = 'takeout archive has no content'
+TAKEOUT_URL_FAILURE = 'takeout url could not be found'
 
 
 class TakeOutExtractor(object):
@@ -85,17 +88,28 @@ class TakeOutExtractor(object):
             return self.__tid
 
         else:
-            to_file = self.__authorized_session.get(secrets.TAKEOUT_URL)
-            df = pd.DataFrame.from_records(json.loads(to_file.content)['files'])
+            response = self.__authorized_session.get(secrets.TAKEOUT_URL)
 
-            if len(df) > 0:
-                df['timeStamp'] = df.name.str.split('-', 3).apply(lambda x: x[1])
-                df['timeStamp'] = pd.to_datetime(df['timeStamp'])
+            if response.status_code == 200:
+                content = json.loads(response.content).get('files')
 
-                self.__tid = df.id[df.timeStamp.idxmax()]
-                return self.__tid
+                if content is not None:
+                    df = pd.DataFrame.from_records(content)
+
+                    if len(df) > 0:
+                        df['timeStamp'] = df.name.str.split('-', 3).apply(lambda x: x[1])
+                        df['timeStamp'] = pd.to_datetime(df['timeStamp'])
+
+                        self.__tid = df.id[df.timeStamp.idxmax()]
+                        return self.__tid
+                    else:
+                        return DRIVE_NOT_READY
+                else:
+                    self.consent.mark_as_failure(ARCHIVE_STRUCTURE_FAILURE)
+                    return ARCHIVE_STRUCTURE_FAILURE
             else:
-                return DRIVE_NOT_READY
+                self.consent.mark_as_failure(TAKEOUT_URL_FAILURE)
+                return TAKEOUT_URL_FAILURE
 
     @property
     def zipped(self):
@@ -467,7 +481,14 @@ class TakeOutExtractor(object):
 
     def run(self):
         """perform the extraction process"""
-        if self.takeout_id != DRIVE_NOT_READY:
+        if self.takeout_id in [ARCHIVE_STRUCTURE_FAILURE, TAKEOUT_URL_FAILURE]:
+            self.consent.mark_as_failure(self.takeout_id)
+
+        elif self.takeout_id == DRIVE_NOT_READY:
+            self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
+            self.__log_it(f'Google Drive for {self.consent.study_id} not ready')
+
+        else:
             if (self.download_takeout_data() or self.load_from_local()) and any([
                 self.extract_searches(),
                 self.extract_gps()
@@ -485,9 +506,6 @@ class TakeOutExtractor(object):
                     self.consent.set_status(ctx.ConsentStatus.FAILED)
             else:
                 pass
-        else:
-            self.consent.set_status(ctx.ConsentStatus.DRIVE_NOT_READY)
-            self.__log_it(f'Google Drive for {self.consent.study_id} not ready')
 
         return self
 
