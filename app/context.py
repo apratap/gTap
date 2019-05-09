@@ -393,7 +393,6 @@ class Consent(Base):
         """send email to admins with log messages
 
         Notes: sends to email addresses ADMIN_EMAILS defined in application config
-
         Returns:
             dict - AWS Simple Email Service response
         """
@@ -404,7 +403,11 @@ class Consent(Base):
             )
             template = Template(secrets.PARTICIPANT_EMAIL_BODY)
 
-            client = boto3.client('ses', region_name=secrets.REGION_NAME)
+            client = boto3.client('ses', 
+                    aws_access_key_id=secrets.AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=secrets.AWS_SECRET_ACCESS_KEY,
+                    region_name=secrets.REGION_NAME)
+            
             response = client.send_email(
                 Source=secrets.FROM_STUDY_EMAIL,
                 Destination={
