@@ -18,6 +18,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession
 import numpy as np
 import pandas as pd
+import dateutil.parser
 from synapseclient import File, Activity
 
 import app.config as secrets
@@ -44,7 +45,6 @@ class TakeOutExtractor(object):
             consent: (gtap.context.Consent) consent to process
         """
         self.consent = consent
-
         self.__archive_path = None
         self.__authorized_session = None
         self.__local = False
@@ -59,7 +59,6 @@ class TakeOutExtractor(object):
         self.__tmp_files = []
         self.__tid = None
         self.__search_queries = None
-        self.__gps_queries = None
         self.cleaned_search_file = None
         self.cleaned_gps_file = None
 
@@ -128,7 +127,6 @@ class TakeOutExtractor(object):
         """
         try:
             jdata = json.loads(self.consent.credentials)
-
             credentials = Credentials(
                 token=jdata['access_token'],
                 refresh_token=jdata['refresh_token'],
@@ -142,7 +140,6 @@ class TakeOutExtractor(object):
             if any(['NoneType' in a for a in e.args]):
                 self.consent.add_search_error()
                 self.consent.add_location_error()
-
                 self.__log_it('cannot authorize session without credentials')
                 return None
             else:
@@ -166,9 +163,7 @@ class TakeOutExtractor(object):
 
     def download_takeout_data(self):
         """download takeout archive from Google Drive
-
-        Returns:
-            success flag as bool
+        Returns:success flag as bool
         """
         if self.__authorized_session is None:
             return False
@@ -203,9 +198,7 @@ class TakeOutExtractor(object):
 
     def extract_searches(self):
         """extract search data from takeout archive
-
-        Returns:
-            success flag as bool
+        Returns:success flag as bool
         """
         try:
             search_files = [f for f in self.zipped.namelist() if 'Search' in f]
@@ -301,6 +294,7 @@ class TakeOutExtractor(object):
                         dfs.append(parse_google_location_data('tmp.json'))
                 os.remove('tmp.json')
                 df = pd.concat(dfs, sort=False)
+
                 filename = self.__filename(
                     secrets.SYNAPSE_LOCATION_NAMING_CONVENTION.format(studyId=self.consent.study_id, 
                         internalID=self.consent.internal_id)
@@ -426,6 +420,8 @@ def process_userSearchQueries_in_htmlFormat(html_file):
     
     df = pd.concat([textSearches_df,webVisits_df], sort=False)
     df = df.loc[:, ('time', 'title', 'titleUrl', 'action')]
+    #fix the timezone mess
+    df.time = df.time.apply(dateutil.parser.parse, ignoretz=True)
     numTotalBlocks = len(blocks)
     numErrorBlocks = len(errorBlock)
     return([df, numTotalBlocks, numErrorBlocks])
@@ -546,7 +542,7 @@ def parse_google_location_data(filename):
         pool.close()
         pool.join()
 
-    js.rename(columns={'latitudeE7': 'lat', 'longitudeE7': 'lon', 'timestampMs': 'ts'}, inplace=True)
+    js.rename(columns={'latitudeE7': 'lat', 'longitudeE7': 'lon', 'timestampMs': 'time'}, inplace=True)
     return js
 
 
