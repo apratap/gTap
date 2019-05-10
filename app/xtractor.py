@@ -3,8 +3,10 @@
 import argparse
 import datetime as dt
 import gc
+import re
 from io import BytesIO
 import json
+import numpy as np
 from multiprocessing.dummy import Pool as TPool
 import os
 from pytz import timezone as tz
@@ -16,6 +18,7 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import AuthorizedSession
 import numpy as np
 import pandas as pd
+import dateutil.parser
 from synapseclient import File, Activity
 
 import app.config as secrets
@@ -42,7 +45,6 @@ class TakeOutExtractor(object):
             consent: (gtap.context.Consent) consent to process
         """
         self.consent = consent
-
         self.__archive_path = None
         self.__authorized_session = None
         self.__local = False
@@ -56,6 +58,9 @@ class TakeOutExtractor(object):
         self.__zip_stream = None
         self.__tmp_files = []
         self.__tid = None
+        self.__search_queries = None
+        self.cleaned_search_file = None
+        self.cleaned_gps_file = None
 
     def __repr__(self):
         return f'<TakeOutExtractor({str(self.consent)})>'
@@ -76,7 +81,6 @@ class TakeOutExtractor(object):
     @property
     def takeout_id(self):
         """get the takeout id
-
         Returns:
             (str) to represent the id if the takeout data is ready else DRIVE_NOT_READY
         """
@@ -123,7 +127,6 @@ class TakeOutExtractor(object):
         """
         try:
             jdata = json.loads(self.consent.credentials)
-
             credentials = Credentials(
                 token=jdata['access_token'],
                 refresh_token=jdata['refresh_token'],
@@ -137,7 +140,6 @@ class TakeOutExtractor(object):
             if any(['NoneType' in a for a in e.args]):
                 self.consent.add_search_error()
                 self.consent.add_location_error()
-
                 self.__log_it('cannot authorize session without credentials')
                 return None
             else:
@@ -161,9 +163,7 @@ class TakeOutExtractor(object):
 
     def download_takeout_data(self):
         """download takeout archive from Google Drive
-
-        Returns:
-            success flag as bool
+        Returns:success flag as bool
         """
         if self.__authorized_session is None:
             return False
@@ -186,7 +186,6 @@ class TakeOutExtractor(object):
         """load takeout archive from local filesystem"""
         if self.__archive_path is None:
             return False
-
         try:
             with open(self.__archive_path, 'rb') as f:
                 self.__zip_stream = BytesIO(f.read())
@@ -199,67 +198,49 @@ class TakeOutExtractor(object):
 
     def extract_searches(self):
         """extract search data from takeout archive
-
-        Returns:
-            success flag as bool
+        Returns:success flag as bool
         """
         try:
             search_files = [f for f in self.zipped.namelist() if 'Search' in f]
 
             if len(search_files) > 0:
+                self.__log_it(f'Found <{len(search_files)}> search files')
+
                 dfs = []
                 for fn in search_files:
-                    with self.zipped.open(fn) as f:
-                        s = f.read().decode('utf-8')
-                        df = pd.DataFrame(json.loads(s))
-                        dfs.append(df)
+                    prefix, suffix = str(fn).split('.')
+                    self.__log_it(f'Processing file {fn} with suffix {suffix}')
+
+                    ## Process JSON search file
+                    if suffix == 'json':                        
+                        with self.zipped.open(fn) as f:
+                            s = f.read().decode('utf-8')
+                            df = pd.DataFrame(json.loads(s))
+                            df['action'] = df.title.str.extract(r'(?P<action>Visited|Searched)')
+                            df.title = df.title.str.replace('Visited ', '')
+                            df.title = df.title.str.replace('Searched for ', '')
+                            dfs.append(df)
+
+                    #Process HTML search file
+                    elif suffix == 'html':
+                        with open('tmp.html', 'wb') as out:
+                            out.write(self.zipped.open(fn).read())
+                            out.close()
+                            df, numTotalBlocks, numErrorBlocks = process_userSearchQueries_in_htmlFormat('tmp.html')
+                            self.__log_it(f'HTML File had {numTotalBlocks} blocks with {numErrorBlocks} blocks failed parsing')
+                            dfs.append(df)
+                        os.remove('tmp.html')
 
                 search_queries = pd.concat(dfs, sort=False)
 
-                def tx(x):
-                    try:
-                        t = dt.datetime.strptime(x, '%Y-%m-%dT%H:%M:%S.%fZ')
-                    except ValueError:
-                        t = dt.datetime.strptime(x, '%Y-%m-%dT%H:%M:%SZ')
-                    except Exception as ex:
-                        raise ex
-
-                    return t
-
-                search_queries['time'] = search_queries.time.apply(tx)
-                search_queries = search_queries.sort_values(by='time')
-
                 # for future studies, the 'locations' column contains true labels for locations (home, work, etc)
-                search_queries = search_queries.drop(columns=[
-                    'header', 'details', 'products', 'locations'
-                ], errors='ignore')
+                # search_queries = search_queries.drop(columns=[ 'header', 'details', 'products', 'locations'], 
+                #     errors='ignore')
+                search_queries = search_queries.loc[:,('time', 'title', 'titleUrl', 'action')]
 
-                actions, titles = [], []
-                for q in search_queries.title:
-                    a = q.split(' ')
-
-                    action = a[0]
-                    if action == 'Searched':
-                        title = ' '.join(a[2:])
-                    else:
-                        title = ' '.join(a[1:])
-
-                    actions.append(action)
-                    titles.append(title)
-
-                search_queries['action'] = actions
-                search_queries['title'] = titles
-
-                filename = self.__filename(f'search_raw_{str(self.consent.internal_id)}.csv')
-                search_queries.to_csv(filename, index=None)
-
-                self.__tmp_files.append({
-                    'type': 'search_raw',
-                    'path': filename
-                })
-                self.__log_it(f'searches extracted')
-
-                return self.clean_search()
+                self.__search_queries = search_queries
+                self.__log_it(f'{search_queries.shape[0]} search queries found and extracted')
+                return self.clean_searches()
             else:
                 self.consent.add_search_error(f'search data not found in archive')
                 return False
@@ -267,217 +248,106 @@ class TakeOutExtractor(object):
             self.consent.add_search_error(f'downloading searches failed with <{str(e)}>')
             return False
 
-    def clean_search(self):
+    def clean_searches(self):
         """perform a tiny bit of pre-processing on search data, and redact through DLP
 
         Notes: All individual search files are processed into one. Only unique search entries are redacted. Web visits
         are not sent to the DLP API.
 
-        Returns:
-            success flag as bool
+        Returns: success flag as bool
         """
         try:
-            dfs = [
-                pd.read_csv(f['path'])
-                for f in self.__tmp_files if f['type'] == 'search_raw'
-            ]
-
-            if len(dfs) == 1:
-                df = dfs[0]
-            elif len(dfs) > 1:
-                df = pd.concat(dfs, axis=0, sort=False)
-            else:
-                return False
-
-            # only process unique searches, build a reference set of uniques to the dup rows
-            def fx(x):
-                idx = x.index.tolist()[0]
-
-                if len(x) > 1:
-                    ref = ','.join([str(int(i)) for i in x.index.tolist()[1:]])
-                    return pd.Series([idx, ref])
-                else:
-                    return pd.Series([idx, np.nan])
-
-            idx_map = df.loc[df.action == 'Searched']\
-                .groupby('title')\
-                .apply(fx)\
-                .reset_index(drop=True)\
-                .rename(columns={0: 'src', 1: 'ref'})
-
-            idx_map.src = idx_map.src.astype(int)
-
-            redacted = make_dlp_request(df.loc[idx_map.src]).reset_index()
-
-            cols_to_update = []
-            for c in redacted.columns:
-                if c == 'index':
-                    continue
-
-                if c not in df.columns:
-                    df[c] = ''
-                    cols_to_update.append(c)
-                    df.loc[redacted.index, c] = redacted[c]
-
-            df.loc[redacted.index, 'title'] = redacted.title
-
-            idx_map = idx_map.loc[redacted.info_type.apply(lambda x: len(x) > 0), :]
-
-            def fx(x):
-                to_set = [int(i) for i in x.ref.split(',')]
-                df.loc[to_set, 'title'] = redacted.loc[x.src, 'title']
-
-                for c in cols_to_update:
-                    df.loc[to_set, c] = redacted.loc[x.src, c]
-
-            [fx(x) for x in idx_map.loc[idx_map.ref.notna()].itertuples()]
-
+            df = self.__search_queries
+            uniqueSearchQueries = df.title.to_list()
+            ## Run the text queries through DLP api
+            dlp_results = run_dlp_api(uniqueSearchQueries)
+            #merge the DLP results
+            df = df.merge(dlp_results, how='left', left_on='title', right_on='title')
+            toRedact = ~df.info_type.isnull()
+            df.title[toRedact] = 'REDACTED'
+            df['redact'] = toRedact
             filename = self.__filename(
-                secrets.SYNAPSE_SEARCH_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
-            )
-            self.__tmp_files.append({
-                'type': 'search_redacted',
-                'path': filename
-            })
+                secrets.SYNAPSE_SEARCH_NAMING_CONVENTION.format(
+                    studyId=self.consent.study_id, internalID=self.consent.internal_id))
             df.to_csv(filename, index=None)
-
+            self.cleaned_search_file = filename
             self.__log_it(f'searches redacted')
             return True
         except Exception as e:
+            self.__log_it(f'redaction failed with <{str(e)}>')
             self.consent.add_search_error(f'redaction failed with <{str(e)}>')
             return False
 
     def extract_gps(self):
         """extract GPS data from takeout archive
-
-        Returns:
-            success flag as bool
+        Returns: success flag as bool
         """
         try:
-            gps_files = [
-                f for f in self.zipped.namelist()
-                if 'Location History' in f
-            ]
+            gps_files = [ f for f in self.zipped.namelist() if 'Location History' in f ]
 
             if len(gps_files) > 0:
-                def write_json(count, f):
-                    filename = self.__filename('%s_%s_%s_GPS.json' % (
-                        str(self.consent.study_id), self.consent.internal_id, count + 1
-                    ))
-
-                    with open(filename, 'wb') as out:
-                        out.write(self.zipped.open(f).read())
+                dfs = []
+                for fn in gps_files:
+                    with open('tmp.json', 'wb') as out:
+                        out.write(self.zipped.open(fn).read())
                         out.close()
-
-                    return filename
-
-                location_files = [
-                    write_json(count, f)
-                    for count, f in enumerate(gps_files)
-                ]
-
-                self.__tmp_files += [{
-                        'type': 'gps_part',
-                        'path': l
-                    } for l in location_files
-                ]
-                self.__log_it(f'{len(location_files)} location part(s) extracted')
-
-                return self.clean_gps()
-            else:
-                self.consent.add_location_error('location data not found in archive')
-                return False
-        except Exception as e:
-            self.consent.add_location_error(f'downloading location parts failed with <{str(e)}>')
-            return False
-
-    def clean_gps(self):
-        """clean GPS data
-
-        Returns:
-            success flag as bool
-        """
-        try:
-            parts, dfs = [f for f in self.__tmp_files if f['type'] == 'gps_part'], []
-
-            if len(parts) > 0:
-                for fn in parts:
-                    dfs.append(parse_google_location_data(fn['path']))
-
-                df = pd.concat(dfs, sort=False).sort_values(by='ts')
+                        dfs.append(parse_google_location_data('tmp.json'))
+                os.remove('tmp.json')
+                df = pd.concat(dfs, sort=False)
 
                 filename = self.__filename(
-                    secrets.SYNAPSE_LOCATION_NAMING_CONVENTION.format(self.consent.study_id, self.consent.internal_id)
+                    secrets.SYNAPSE_LOCATION_NAMING_CONVENTION.format(studyId=self.consent.study_id, 
+                        internalID=self.consent.internal_id)
                 )
                 df.to_csv(filename, index=None)
-
-                self.__tmp_files.append({
-                    'type': 'gps_processed',
-                    'path': filename
-                })
-                self.__log_it(f'parsing location data completed successfully')
-
+                self.cleaned_gps_file = filename
+                self.__log_it(f'location data extracted')
                 return True
             else:
+                self.__log_it(f'location data not found in archive')
+                self.consent.add_location_error('location data not found in archive')
                 return False
+
         except Exception as e:
-            self.consent.add_location_error(f'parsing location data failed with <{str(e)}>')
+            self.__log_it(f'Either downloading/parsing location parts failed with <{str(e)}>')
+            self.consent.add_location_error(f'Either downloading/parsing location parts failed with <{str(e)}>')
             return False
 
-    def push_to_synapse(self, force=False):
+
+    def push_to_synapse(self):
         """upload all processed files to Synapse
-
-        Args:
-            force: (bool) optional flag to force overwrite if file exists
-
-        Returns:
-            (int) as number of files uploaded
         """
-        cnt = 0
+        count = 0
+        def tmp(self, path, setter, parent):        
+            try:
+                result = syn.store(File(path, parentId=parent))
+                synid = result.properties['id']
+                setter(synid)
+                syn.setProvenance(synid, activity=Activity( name='gTap Archive Manager'))
+                syn.setAnnotations( synid, annotations={    
+                    'study_id': self.consent.study_id,
+                    'internal_id': self.consent.internal_id
+                    }
+                )
+                self.__log_it(f'uploaded {path} data as {synid}')
+                os.remove(path)
+            except Exception as e:
+                self.__log_it(f'uploading {path} data failed with <{str(e)}>')
+                return 0
 
-        for tmp in self.__tmp_files:
-            t, path = tmp['type'], tmp['path']
+        if self.cleaned_search_file is not None:
+            parent = secrets.SEARCH_SYNID
+            setter = self.consent.set_search_sid
+            tmp(self, self.cleaned_search_file, setter, parent)
+            count += 1
 
-            if t not in ['gps_processed', 'search_redacted']:
-                continue
+        if self.cleaned_gps_file is not None:
+            parent = secrets.LOCATION_SYNID
+            setter = self.consent.set_location_sid
+            tmp(self, self.cleaned_gps_file, setter, parent)
+            count += 1
+        return count
 
-            if t in ['gps_processed']:
-                parent = secrets.LOCATION_SYNID
-                setter = self.consent.set_location_sid
-            elif t in ['search_redacted']:
-                parent = secrets.SEARCH_SYNID
-                setter = self.consent.set_search_sid
-            else:
-                raise Exception('there\'s a snake in my boot')
-
-            if force or not does_exist(parent, path):
-                try:
-                    result = syn.store(File(path, parentId=parent))
-
-                    synid = result.properties['id']
-                    setter(synid)
-
-                    syn.setProvenance(
-                        synid,
-                        activity=Activity(
-                            name='gTap Archive Manager',
-                            description='This file was created by gTap',
-                        )
-                    )
-                    syn.setAnnotations(
-                        synid,
-                        annotations={
-                            'study_id': self.consent.study_id,
-                            'internal_id': self.consent.internal_id
-                        }
-                    )
-
-                    cnt += 1
-                    self.__log_it(f'uploaded {t} data as {synid}')
-                except Exception as e:
-                    self.__log_it(f'uploading {t} data failed with <{str(e)}>')
-                    return 0
-        return cnt
 
     def run(self):
         """perform the extraction process"""
@@ -494,20 +364,67 @@ class TakeOutExtractor(object):
                 self.extract_gps()
             ]):
                 try:
-                    cnt = self.push_to_synapse()
-
+                    count = self.push_to_synapse()
                     self.consent.clear_credentials()
                     self.consent.notify_admins()
-
-                    self.__log_it(f'task complete. {cnt} file {"s" if cnt > 1 else ""} put to Synapse')
+                    self.__log_it(f'task complete. {count} file {"s" if count > 1 else ""} put to Synapse')
                     self.consent.set_status(ctx.ConsentStatus.COMPLETE)
                 except Exception as e:
                     ctx.add_log_entry(str(e), self.consent.internal_id)
                     self.consent.set_status(ctx.ConsentStatus.FAILED)
             else:
                 pass
-
         return self
+
+
+
+def process_userSearchQueries_in_htmlFormat(html_file):
+    '''
+    html_file_content - is the content (string) of the HTML file
+    '''
+    textSearches = []
+    webVisits = []
+    errorBlock = []
+    
+    def __processSearchBlock(block):
+        webVisit       = re.match('^.*Visited.*href="(.*)">(.*)</a><br>(.*?)</div.*$', block)
+        textSearch     = re.match('^.+?Searched for.+?">(.+?)</a><br>(.*?)</div>.+$', block)
+        #location       = re.match('^.*Locations.*">(.*)</a><br></div></div></div>$', block)
+        if textSearch:
+            textSearch = textSearch.groups()
+        else:
+            textSearch = None
+        if webVisit:
+            webVisit = webVisit.groups()
+        else:
+            webVist = None
+        return([textSearch,webVisit])
+
+    with open(html_file, "r") as f:
+        contents = f.read()
+    #this should be a unique search block in HTML file
+    blocks = re.findall('<div class="outer-cell.+?mdl-shadow--2dp">.+?</div></div></div>',contents)
+
+    #process each block    
+    for b in blocks:
+        textSearch,webVisit = __processSearchBlock(b)
+        if textSearch is None and webVisit is None:
+            errorBlock.append(b)
+        if textSearch: textSearches.append(textSearch) 
+        if webVisit: webVisits.append(webVisit)
+    webVisits_df = pd.DataFrame.from_records(webVisits,columns=('titleUrl', 'title', 'time' ))
+    textSearches_df = pd.DataFrame.from_records(textSearches,columns=('title', 'time'))
+    textSearches_df['titleUrl'] = 'NA'
+    textSearches_df['action'] = 'Searched'
+    webVisits_df['action'] = 'Visited'
+    
+    df = pd.concat([textSearches_df,webVisits_df], sort=False)
+    df = df.loc[:, ('time', 'title', 'titleUrl', 'action')]
+    #fix the timezone mess
+    df.time = df.time.apply(dateutil.parser.parse, ignoretz=True)
+    numTotalBlocks = len(blocks)
+    numErrorBlocks = len(errorBlock)
+    return([df, numTotalBlocks, numErrorBlocks])
 
 
 def does_exist(synid, name):
@@ -524,84 +441,72 @@ def does_exist(synid, name):
     return any([name in c for c in children])
 
 
-def make_dlp_request(df):
+def run_dlp_api(queryList):
     """redact a dataframe through DLP
 
-    Notes: each request is processed in parallel according to the number of threads defined by CLEANING_THREADS in 
-    the application config.
+    Args: queryList
 
-    Args:
-        df: (pandas.DataFrame)
-
-    Returns:
-        pandas.DataFrame with redacted data and added columns
+    Returns:pandas.DataFrame 
     """""
-    df = df.copy()
 
-    def inspect_wrapper(args):
-        idx, x = args
+    def buildQueryTable(searchQueries):
+        """
+        ref - https://github.com/GoogleCloudPlatform/python-docs-samples/blob/master/dlp/inspect_content.py
+        """
+        searchQueries = np.unique(searchQueries)
+        rows = []
+        for query in searchQueries:
+            rows.append({ "values": [{"string_value": query} ]})
+        table = {}
+        table['headers'] = [ {'name' : 'userSearchQueries' }]
+        table['rows'] = rows
+        item = {"table" : table}
+        return item
 
-        response = __dlp.inspect_content(
-            parent=parent,
-            inspect_config=secrets.DLP_INSPECT_CONFIG,
-            item={'value': x}
-        )
-        return idx, x, response
+    def chunks(l, n):
+        """Yield successive n-sized chunks from l"""
+        for i in range(0, len(l), n):
+            yield l[i:i + n]
+        
+    def make_dlp_request(dlpServiceObject, searchQueries, DLP_PROJECT_ID, DLP_INSPECT_CONFIG):
+        parent = dlpServiceObject.project_path(DLP_PROJECT_ID)
+        
+        #pre-process the text list into JSON
+        items = buildQueryTable(searchQueries)
+        
+        #Run the actual query
+        response = dlpServiceObject.inspect_content(
+                parent=parent,
+                inspect_config=DLP_INSPECT_CONFIG,
+                item=items)
+        tmp = []
+        for f in response.result.findings:
+            tmp.append([f.quote, f.info_type.name, f.likelihood])
+        df = pd.DataFrame.from_records(tmp, columns=('title', 'info_type', 'likelihood'))
+        return df
 
-    def process_results(args):
-        idx, x, response = args
+    ### __dlp is the global authorized object to make queries using DLP service account creds
+    ### parent = sets the project under which DLP queries are run
+    parent = __dlp.project_path(secrets.DLP_PROJECT_ID)    
+    queryList = np.unique(queryList)
+    ##Process the queryList in chunks - Max CHUNK_SIZE = 2000 (can be changed)
+    CHUNK_SIZE= 2000
+    DLP_results = [ ]
+    for chunk in chunks(queryList, CHUNK_SIZE):
+        DLP_results.append(make_dlp_request(__dlp, chunk, secrets.DLP_PROJECT_ID, secrets.DLP_INSPECT_CONFIG))
+    DLP_results = pd.concat(DLP_results, ignore_index=True)
 
-        findings = response.result.findings
-        info_types, likelihoods, redactions = [], [], []
-
-        if findings is not None and len(findings) > 0:
-            for finding in findings:
-                info_type = finding.info_type.name
-
-                x = x.replace(finding.quote, info_type)
-                info_types.append(info_type)
-
-                lik = str(finding)
-                lik = lik[lik.find('likelihood') + 11:]
-                lik = lik[:lik.find('\n')].strip()
-                likelihoods.append(lik)
-
-                redactions.append('partial')
-
-        return idx, x, ', '.join(info_types), ', '.join(likelihoods), ', '.join(redactions)
-
-    parent = __dlp.project_path(secrets.DLP_PROJECT_ID)
-
-    # run each query through DLP
-    pool = TPool(secrets.CLEANING_THREADS)
-    results = pool.map(inspect_wrapper, [(idx, q.title) for idx, q in df.iterrows()])
-
-    # process the results
-    redacted = list(pool.map(process_results, results))
-    pool.close()
-
-    new_cols = ['info_type', 'likelihood', 'redact']
-    for c in new_cols:
-        df[c] = ''
-
-    for item in redacted:
-        df.loc[item[0], 'title'] = item[1]
-        df.loc[item[0], new_cols] = item[2:]
-
-    return df
+    return DLP_results
 
 
 def parse_google_location_data(filename):
     """parse GPS data from Takeout archive"""
     def arow(args):
         idx, row = args
-
         try:
             j_ = js.activity[idx]
-
             if isinstance(j_, float):
                 return np.nan
-
             if len(j_) > 0:
                 result = j_[0]['activity'][0]['type']
                 return result
@@ -618,33 +523,26 @@ def parse_google_location_data(filename):
     if 'verticalAccuracy' in js.columns:
         js.drop(columns='verticalAccuracy', inplace=True)
 
-    if 'altitude' in js.columns:
-        js.drop(columns='altitude', inplace=True)
+    # if 'altitude' in js.columns:
+    #     js.drop(columns='altitude', inplace=True)
 
     if 'heading' in js.columns:
         js.drop(columns='heading', inplace=True)
 
-    if 'velocity' in js.columns:
-        js.drop(columns='velocity', inplace=True)
+    # if 'velocity' in js.columns:
+    #     js.drop(columns='velocity', inplace=True)
 
     js.timestampMs = pd.to_datetime(js.timestampMs, unit='ms')
-
     js.latitudeE7 = np.round(js.latitudeE7 / 10e6, 5)
     js.longitudeE7 = np.round(js.longitudeE7 / 10e6, 5)
 
-    js['date'] = js.timestampMs.apply(dt.datetime.date)
-
     if 'activity' in js.columns:
         pool = TPool(secrets.CLEANING_THREADS)
-
         js.activity = list(pool.map(arow, list(js.iterrows())))
-
         pool.close()
         pool.join()
 
-    js.rename(columns={'latitudeE7': 'lat', 'longitudeE7': 'lon', 'timestampMs': 'ts'}, inplace=True)
-
-    js = js.sort_values(by='ts')
+    js.rename(columns={'latitudeE7': 'lat', 'longitudeE7': 'lon', 'timestampMs': 'time'}, inplace=True)
     return js
 
 
@@ -653,7 +551,7 @@ def process_from_local(study_id, consent_dt, path):
 
     Args:
         study_id: (str) participant's study id
-        consent_dt: (datetime) datetime the participant consented
+        consent_dt: (datetime) datetime the participant consented 
         path: (str) path to takeout archive
     """
     args = {
@@ -669,10 +567,8 @@ def process_from_local(study_id, consent_dt, path):
 
         try:
             task = TakeOutExtractor(consent, archive_path=path).run()
-
             # make sure all updates have been persisted to backend
             ctx.commit(s)
-
             # final call to update Synapse consents table
             task.consent.update_synapse()
         except Exception as e:
@@ -704,11 +600,10 @@ def main():
         '--dt',
         type=str,
         help="""
-        dd/mon/year-TZ-hr:min:sec 
+        dd/mon/year 
             dd:   2 digit day
             mon:  2 digit month
             year: 4 digit year
-            TZ:   timezone as defined by https://docs.python.org/2/library/datetime.html
         """,
         required=True
     )
@@ -722,7 +617,7 @@ def main():
     args = parser.parse_args()
 
     # verify consent date is in correct format
-    fmt = '%m/%d/%Y-%Z-%H:%M:%S'
+    fmt = '%m/%d/%Y'
     try:
         consent_dt = dt.datetime.strptime(args.dt, fmt)
     except ValueError as e:
